@@ -1,0 +1,38 @@
+# Dependencies
+node_modules
+npm-debug.log
+package-lock.json
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Version control
+.git
+.gitignore
+
+# Tests
+tests
+coverage
+
+# Docs & metadata
+README.md
+*.md
+LICENSE
+
+# Local uploads (ephemeral — do not bake into image)
+uploads/*
+!uploads/.gitkeep
+
+# OS / editor
+.DS_Store
+.idea
+.vscode
+*.log
+tmp-bs.txt
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml

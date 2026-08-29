@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets (NEVER commit)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Uploads (ephemeral image storage — never commit user data)
+uploads/
+!uploads/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Test coverage
+coverage/
+
+# Misc
+tmp-*
+*.tmp
