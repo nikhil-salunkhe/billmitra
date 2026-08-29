@@ -26,8 +26,18 @@ const env = {
   adminSeedName: process.env.ADMIN_SEED_NAME || 'Super Admin',
   adminSeedPassword: process.env.ADMIN_SEED_PASSWORD || '',
 
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
-  adminUrl: process.env.ADMIN_URL || 'http://localhost:5173',
+  // Production defaults resolve to the deployed admin frontend so CORS works
+  // without extra configuration; env vars still override.
+  clientUrl:
+    process.env.CLIENT_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://billmitraadmin.netlify.app'
+      : 'http://localhost:3000'),
+  adminUrl:
+    process.env.ADMIN_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://billmitraadmin.netlify.app'
+      : 'http://localhost:5173'),
   ownerAppUrl: process.env.OWNER_APP_URL || '',
 
   // Payment gateway placeholders (never hard-code real secrets).
