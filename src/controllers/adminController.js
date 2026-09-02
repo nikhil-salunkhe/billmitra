@@ -280,6 +280,20 @@ const deactivateRechargePlan = asyncHandler(async (req, res) => {
   return success(res, { plan }, 'Recharge plan deactivated');
 });
 
+/**
+ * Hard delete a recharge plan. Use when the plan was created by mistake and
+ * must disappear from every list (owner-facing included). Any Subscription or
+ * Payment that references this planId still keeps its planId string (we never
+ * cascade-delete financial records), but the plan card vanishes from purchase
+ * lists because the owner app only offers plans that exist in this collection.
+ */
+const deleteRechargePlan = asyncHandler(async (req, res) => {
+  const { ApiError } = require('../utils/ApiError');
+  const plan = await RechargePlan.findByIdAndDelete(req.params.id);
+  if (!plan) throw ApiError.notFound('Recharge plan not found', 'PLAN_NOT_FOUND');
+  return success(res, { id: req.params.id }, 'Recharge plan deleted');
+});
+
 /** GET /api/admin/payments — recharge history across all businesses. */
 const listAllPayments = asyncHandler(async (req, res) => {
   const limit = Math.min(200, parseInt(req.query?.limit, 10) || 50);
@@ -346,6 +360,7 @@ module.exports = {
   createRechargePlan,
   updateRechargePlan,
   deactivateRechargePlan,
+  deleteRechargePlan,
   listAllPayments,
   updatePaymentMethod,
 };

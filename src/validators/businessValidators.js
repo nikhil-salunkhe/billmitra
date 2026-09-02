@@ -23,8 +23,9 @@ const createBusinessSchema = z.object({
   pincode: z.string().trim().max(12).optional(),
   gstRegistered: z.boolean().optional(),
   gstin: z.string().trim().max(20).optional(),
-  // Subscription offer: INITIAL (2 months free) or SIX_MONTH_FREE (6 months
-  // free, then ₹2,500 per 6 months). Defaults to INITIAL when omitted.
+  // Subscription offer: INITIAL (2 months free), SIX_MONTH_FREE (6 months
+  // free, then ₹2,500 per 6 months) or YEARLY (buy app + printer -> year 1
+  // free, then ₹2,999/year). Defaults to INITIAL when omitted.
   plan: z.enum(Object.keys(SUBSCRIPTION_PLANS)).optional(),
   logoUrl: z.string().trim().max(500).optional(),
   openingTime: z.string().trim().regex(TIME_24H, 'Use 24-hour HH:mm format').optional().or(z.literal('')),

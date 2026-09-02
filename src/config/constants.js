@@ -105,6 +105,20 @@ const SUBSCRIPTION_PLANS = Object.freeze({
     label: 'First 6 Months Free',
     tagline: '6 months free · then ₹2,500 per 6 months',
   },
+  // Yearly bundle: owner buys the app + thermal-printer package at purchase
+  // (hardware price handled offline) and the FIRST YEAR is FREE. After that a
+  // ₹2,999 recharge covers the next 12 months (≈ ₹250/month). Admin picks this
+  // plan when creating a hardware-bundle customer.
+  YEARLY: {
+    name: 'YEARLY',
+    trialMonths: 12, // first year FREE (app + printer bundle)
+    rechargeMonths: 12, // each recharge buys 12 months
+    rechargeAmount: 2999, // ₹2,999 per year
+    setupAmount: 0, // hardware bundle is invoiced offline at purchase
+    monthlyAmount: Math.round(2999 / 12), // ≈ ₹250 display figure
+    label: 'First Year Free',
+    tagline: 'Buy app + printer · year 1 free · then ₹2,999/year',
+  },
 });
 
 // Threshold (in days) before expiry when a subscription is flagged as EXPIRING.

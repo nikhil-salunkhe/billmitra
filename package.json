@@ -19,7 +19,8 @@
     "test:reports": "node --test tests/reports.test.js",
     "test:subs": "node --test tests/subscription.test.js",
     "seed:admin": "node src/scripts/seed-admin.js",
-    "seed:demo": "node src/scripts/seed-demo.js"
+    "seed:demo": "node src/scripts/seed-demo.js",
+    "seed:plans": "node src/scripts/seed-plans.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

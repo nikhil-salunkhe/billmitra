@@ -1,5 +1,4 @@
 'use strict';
-
 const express = require('express');
 
 const { validate } = require('../middleware/validationMiddleware');
@@ -48,7 +47,8 @@ const {
 router.get('/recharge-plans', adminController.listRechargePlans);
 router.post('/recharge-plans', validate(createRechargePlanSchema), adminController.createRechargePlan);
 router.put('/recharge-plans/:id', validate(updateRechargePlanSchema), adminController.updateRechargePlan);
-router.delete('/recharge-plans/:id', adminController.deactivateRechargePlan);
+router.patch('/recharge-plans/:id/deactivate', adminController.deactivateRechargePlan);
+router.delete('/recharge-plans/:id', adminController.deleteRechargePlan);
 router.get('/payments', adminController.listAllPayments);
 router.patch('/payments/:id', validate(updatePaymentMethodSchema), adminController.updatePaymentMethod);
 

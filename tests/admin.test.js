@@ -145,3 +145,31 @@ test('audit log lists suspend/activate/reset actions', async () => {
   assert.ok(actions.includes('BUSINESS_ACTIVATED'));
   assert.ok(actions.includes('OWNER_PASSWORD_RESET'));
 });
+
+test('DELETE recharge-plan removes it; requires super admin', async () => {
+  // Owner tokens must be rejected on admin plan routes.
+  const forbidden = await send('DELETE', '/api/admin/recharge-plans/000000000000000000000000', null, ownerToken);
+  assert.strictEqual(forbidden.status, 403);
+
+  // Create a throwaway plan, then delete it.
+  const created = await send('POST', '/api/admin/recharge-plans', {
+    name: 'Test Delete Plan',
+    months: 1,
+    price: 499,
+  }, adminToken);
+  assert.strictEqual(created.status, 201);
+  const planId = created.json.data.plan ? created.json.data.plan.id || created.json.data.plan._id : created.json.data.id || created.json.data._id;
+
+  const deleted = await send('DELETE', `/api/admin/recharge-plans/${planId}`, null, adminToken);
+  assert.strictEqual(deleted.status, 200);
+
+  // It must no longer appear in the catalog.
+  const list = await send('GET', '/api/admin/recharge-plans', null, adminToken);
+  assert.strictEqual(list.status, 200);
+  const stillThere = (list.json.data.plans || list.json.data).some((p) => (p.id || p._id) === planId);
+  assert.strictEqual(stillThere, false);
+
+  // Deleting the same plan again must 404.
+  const again = await send('DELETE', `/api/admin/recharge-plans/${planId}`, null, adminToken);
+  assert.strictEqual(again.status, 404);
+});
