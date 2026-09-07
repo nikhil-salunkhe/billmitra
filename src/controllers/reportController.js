@@ -71,8 +71,12 @@ const pdfReport = asyncHandler(async (req, res) => {
   const type = req.query.type || 'sales';
   const lang = PDF_LANGS.includes(req.query.lang) ? req.query.lang : 'en';
   const range = reportService.getReportRange(req.query);
-  const business = await Business.findById(req.businessId).select('businessName');
+  const business = await Business.findById(req.businessId).select('businessName phone address city state pincode');
   const businessName = business?.businessName || 'Business';
+  const businessMeta = [
+    [business?.address, [business?.city, business?.state, business?.pincode].filter(Boolean).join(' - ')].filter(Boolean).join(', '),
+    business?.phone ? `Ph: ${business.phone}` : '',
+  ].filter(Boolean).join(' | ');
 
   const isValid = ['sales', 'products', 'payments'].includes(type);
   if (!isValid) throw ApiError.badRequest('Invalid report type', 'INVALID_REPORT_TYPE');
@@ -92,6 +96,19 @@ const pdfReport = asyncHandler(async (req, res) => {
   let headerLines;
   let rows = [];
   let summaryLines = [];
+  let extraSections = [];
+
+  // Product-wise breakdown (name + quantity sold) is included on every report —
+  // it is what the shop owner actually needs to review the week.
+  const topProducts = await reportService.getTopProducts(req.businessId, range, 15);
+  const productRows = (topProducts || []).map((p) => [p.name, fmtInt(p.quantity), fmtAmount(p.revenue)]);
+  if (productRows.length > 0) {
+    extraSections.push({
+      heading: t(lang, 'topProducts'),
+      header: [t(lang, 'product'), t(lang, 'qty'), t(lang, 'revenue')],
+      rows: productRows,
+    });
+  }
 
   if (type === 'sales' || type === 'payments') {
     const sales = await reportService.getSalesReport(req.businessId, range, req.query.groupBy || 'day');
@@ -150,12 +167,14 @@ const pdfReport = asyncHandler(async (req, res) => {
   const buf = await pdfReportService.buildReportPdf({
     title,
     businessName,
+    businessMeta,
     periodLabel,
     metaLabel,
     headerLines,
     rows,
     summaryLines,
     lang,
+    extraSections,
   });
 
   res.setHeader('Content-Type', 'application/pdf');

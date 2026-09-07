@@ -368,11 +368,11 @@ function findBrowser() {
  * rows: array of either a 3-cell array ([c1, c2, c3]) or { type: 'separator' }.
  * The table column widths: description flexible, middle narrow/right-aligned.
  */
-function buildReportHtml({ title, businessName, periodLabel, metaLabel, headerLines, rows, summaryLines, lang }) {
+function buildReportHtml({ title, businessName, businessMeta = '', periodLabel, metaLabel, headerLines, rows, summaryLines = [], lang = 'en', extraSections = [] }) {
   const fontFace = getDevanagariFontFace();
   const header = headerLines || [t(lang, 'description'), t(lang, 'details'), t(lang, 'amount')];
 
-  const bodyRows = (rows || []).map((row) => {
+  const renderRows = (list) => (list || []).map((row) => {
     if (row && typeof row === 'object' && row.type === 'separator') {
       return '<tr class="sep"><td colspan="3"></td></tr>';
     }
@@ -380,21 +380,35 @@ function buildReportHtml({ title, businessName, periodLabel, metaLabel, headerLi
     return `<tr><td>${escHtml(a)}</td><td class="mid">${escHtml(b)}</td><td class="amt">${escHtml(c)}</td></tr>`;
   }).join('\n');
 
+  const bodyRows = renderRows(rows);
+
   const summaryHtml = (summaryLines || [])
     .map((s) => `<div class="summary-line">${escHtml(s)}</div>`)
     .join('');
 
+  const sectionsHtml = (extraSections || []).map((sec) => {
+    const secHeader = sec.header || header;
+    const heading = sec.heading ? `<div class="section-title">${escHtml(sec.heading)}</div>` : '';
+    return `${heading}
+  <table>
+    <thead><tr><th>${escHtml(secHeader[0])}</th><th class="mid">${escHtml(secHeader[1] || '')}</th><th class="amt">${escHtml(secHeader[2] || '')}</th></tr></thead>
+    <tbody>
+${renderRows(sec.rows)}
+    </tbody>
+  </table>`;
+  }).join('\n');
+
   const html = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><style>
   ${fontFace}
-  @page { size: A4; margin: 14mm 12mm 14mm 12mm; }
+  @page { size: A4; margin: 14mm 12mm 16mm 12mm; }
   * { box-sizing: border-box; }
   body { font-family: 'Devanagari', 'Segoe UI', 'Noto Sans', Arial, sans-serif; color: #111827; font-size: 10.5px; margin: 0; }
-  .brand { font-size: 15px; font-weight: 800; letter-spacing: .3px; }
-  .brand span { color: #059669; }
-  .head-meta { font-size: 10px; color: #6b7280; margin-top: 1px; }
-  .title { font-size: 14px; font-weight: 700; color: #1f2937; margin-top: 8px; }
-  .rule { border-bottom: 2px solid #059669; margin-top: 3px; }
+  .shopname { font-size: 20px; font-weight: 800; color: #064E3B; line-height: 1.3; }
+  .shopmeta { font-size: 10px; color: #6b7280; margin-top: 2px; line-height: 1.5; }
+  .title { font-size: 14px; font-weight: 700; color: #1f2937; margin-top: 10px; }
+  .head-meta { font-size: 10px; color: #6b7280; margin-top: 2px; }
+  .rule { border-bottom: 2px solid #059669; margin-top: 4px; }
   table { width: 100%; border-collapse: collapse; margin-top: 10px; }
   thead th { background: #059669; color: #fff; font-weight: 700; padding: 6px 8px; text-align: left; font-size: 10px; }
   thead th.mid, thead th.amt { text-align: right; }
@@ -403,13 +417,16 @@ function buildReportHtml({ title, businessName, periodLabel, metaLabel, headerLi
   tbody .mid { color: #374151; }
   tbody tr.sep td { padding: 4px 0; border-bottom: none; }
   tbody tr:last-child td { border-bottom: none; }
+  .section-title { font-size: 12.5px; font-weight: 800; color: #064E3B; margin-top: 16px; }
   .summary { margin-top: 12px; border-left: 4px solid #059669; background: #f0fdf4; padding: 8px 12px; border-radius: 6px; }
   .summary-line { font-size: 10.5px; font-weight: 600; margin: 0 0 3px 0; }
+  .foot { margin-top: 18px; text-align: center; font-size: 9.5px; color: #9ca3af; }
+  .foot b { color: #059669; }
 </style></head><body>
-  <div class="brand">Bill<span>Mitra</span> &middot; ${escHtml(t(lang, 'report'))}</div>
-  <div class="head-meta">${escHtml(businessName)}</div>
-  <div class="head-meta">${escHtml(t(lang, 'period'))}: ${escHtml(periodLabel)} &nbsp;|&nbsp; ${escHtml(t(lang, 'generatedOn'))}: ${escHtml(metaLabel)}</div>
+  <div class="shopname">${escHtml(businessName)}</div>
+  ${businessMeta ? `<div class="shopmeta">${escHtml(businessMeta)}</div>` : ''}
   <div class="title">${escHtml(title)}</div>
+  <div class="head-meta">${escHtml(t(lang, 'period'))}: ${escHtml(periodLabel)} &nbsp;|&nbsp; ${escHtml(t(lang, 'generatedOn'))}: ${escHtml(metaLabel)}</div>
   <div class="rule"></div>
   <table>
     <thead><tr><th>${escHtml(header[0])}</th><th class="mid">${escHtml(header[1] || '')}</th><th class="amt">${escHtml(header[2] || '')}</th></tr></thead>
@@ -417,7 +434,9 @@ function buildReportHtml({ title, businessName, periodLabel, metaLabel, headerLi
 ${bodyRows}
     </tbody>
   </table>
+${sectionsHtml}
   ${summaryHtml ? `<div class="summary">${summaryHtml}</div>` : ''}
+  <div class="foot"><b>Powered by BillMitra</b></div>
 </body></html>`;
 
   return html;
@@ -500,7 +519,7 @@ function escapeText(value) {
     .replace(/\)/g, '\\)');
 }
 
-function buildAsciiPdfFallback({ businessName, periodLabel, rows }) {
+function buildAsciiPdfFallback({ businessName, title, periodLabel, rows }) {
   const W = 612;
   const H = 792;
   const leftX = 48;
@@ -510,8 +529,9 @@ function buildAsciiPdfFallback({ businessName, periodLabel, rows }) {
   const lineH = 15;
 
   const content = [];
-  content.push(`BT /F2 16 Tf ${leftX} ${topY} Td (BillMitra Report) Tj ET`);
-  content.push(`BT /F2 12 Tf ${leftX} ${topY - 22} Td (${escapeText(businessName)}) Tj ET`);
+  // Shop name is the big header (NOT the app name) — the report belongs to the shop.
+  content.push(`BT /F2 16 Tf ${leftX} ${topY} Td (${escapeText(businessName || 'Report')}) Tj ET`);
+  content.push(`BT /F2 12 Tf ${leftX} ${topY - 22} Td (${escapeText(title || '')}) Tj ET`);
   content.push(`BT /F1 10 Tf ${leftX} ${topY - 40} Td (Period: ${escapeText(periodLabel)}) Tj ET`);
   content.push('q 48 ' + (topY - 50) + ' 516 0.6 re f Q');
 
@@ -811,24 +831,25 @@ async function buildBillPdf({ business, bill, lang = 'en' }) {
  * @param {string} [opts.lang]      - 'en' | 'mr' | 'both'
  * @returns {Promise<Buffer>}
  */
-async function buildReportPdf({ title, businessName, periodLabel, metaLabel = '', headerLines, rows, summaryLines = [], lang = 'en' }) {
+async function buildReportPdf({ title, businessName, businessMeta = '', periodLabel, metaLabel = '', headerLines, rows, summaryLines = [], lang = 'en', extraSections = [] }) {
   try {
     const html = buildReportHtml({
       title,
       businessName,
+      businessMeta,
       periodLabel,
       metaLabel,
       headerLines,
       rows,
       summaryLines,
       lang,
+      extraSections,
     });
     return await renderHtmlToPdf(html);
   } catch (e) {
-    // TEMP-DEBUG: log the render failure so the fallback reason is visible.
     console.error('[pdfReportService] Edge render failed:', e && e.message ? e.message : e);
-    // The fallback keeps the full row set (English text only).
-    return buildAsciiPdfFallback({ businessName, periodLabel, rows });
+    // The fallback keeps the full row set (English text only), headed by the shop name.
+    return buildAsciiPdfFallback({ businessName, title, periodLabel, rows });
   }
 }
 
