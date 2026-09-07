@@ -38,27 +38,33 @@ const getBill = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/bills/:id/pdf?lang=en|mr|both
- * Streams a professional bilingual (English + Marathi) A4 TAX INVOICE PDF with
- * product name, quantity, rate, GST%and amount columns plus a clear TOTAL.
+ * GET /api/bills/:id/pdf?lang=en|mr|both&paper=a4|58|80
+ * Streams a professional bilingual (English + Marathi) TAX INVOICE PDF with
+ * product name, quantity, rate, GST% and amount columns plus a clear TOTAL.
+ * paper=58 / paper=80 produce thermal receipt-width PDFs (for POS printing or
+ * sharing on WhatsApp); paper=a4 (default) produces the full-page invoice.
  * Bypasses the JSON envelope and returns octet-stream with Content-Disposition.
  */
 const getBillPdf = asyncHandler(async (req, res) => {
   const lang = PDF_LANGS.includes(req.query.lang) ? req.query.lang : 'both';
+  const paper = req.query.paper === '58' || req.query.paper === '80' ? req.query.paper : 'a4';
   const bill = await billingService.getBill(req.businessId, req.params.id);
   const business = await Business.findById(req.businessId).select(
     'businessName addressLine city pincode phone gstNumber'
   );
-  const buf = await pdfReportService.buildBillPdf({
+  const args = {
     business: business ? business.toObject() : {},
     bill: bill.toSafeJSON(),
     lang,
-  });
+  };
+  const buf = paper === 'a4'
+    ? await pdfReportService.buildBillPdf(args)
+    : await pdfReportService.buildThermalBillPdf({ ...args, widthMm: Number(paper) });
   const safeNo = String(bill.invoiceNumber || 'bill').replace(/[^A-Za-z0-9_-]/g, '');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="billmitra-${safeNo}-${lang}.pdf"`
+    `attachment; filename="billmitra-${safeNo}-${lang}${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`
   );
   return res.send(buf);
 });

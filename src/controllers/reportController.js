@@ -164,7 +164,8 @@ const pdfReport = asyncHandler(async (req, res) => {
         ? t(lang, 'paymentReport')
         : t(lang, 'topProducts');
 
-  const buf = await pdfReportService.buildReportPdf({
+  const paper = req.query.paper === '58' || req.query.paper === '80' ? req.query.paper : 'a4';
+  const pdfArgs = {
     title,
     businessName,
     businessMeta,
@@ -175,12 +176,15 @@ const pdfReport = asyncHandler(async (req, res) => {
     summaryLines,
     lang,
     extraSections,
-  });
+  };
+  const buf = paper === 'a4'
+    ? await pdfReportService.buildReportPdf(pdfArgs)
+    : await pdfReportService.buildThermalReportPdf({ ...pdfArgs, widthMm: Number(paper) });
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="billmitra-${type}-${lang}-report.pdf"`
+    `attachment; filename="billmitra-${type}-${lang}${paper === 'a4' ? '' : '-' + paper + 'mm'}-report.pdf"`
   );
   return res.send(buf);
 });

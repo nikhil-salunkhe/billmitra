@@ -442,6 +442,75 @@ ${sectionsHtml}
   return html;
 }
 // ---------------------------------------------------------------------------
+// Thermal (58mm / 80mm) receipt-style builders — for POS printers & sharing.
+// Page width is driven by CSS `@page size` so headless Chrome sizes correctly.
+// ---------------------------------------------------------------------------
+
+/** Shared CSS for a thermal-width page. */
+function thermalPageCss(widthMm, fontFace) {
+  const w = Number(widthMm) || 58;
+  return `
+  ${fontFace}
+  @page { size: ${w}mm auto; margin: 3mm 2.5mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Devanagari', 'Segoe UI', 'Noto Sans', Arial, sans-serif;
+         color: #000; font-size: 11px; margin: 0; width: ${w - 5}mm; }
+  .shopname { text-align: center; font-size: 15px; font-weight: 800; line-height: 1.3; }
+  .shopmeta { text-align: center; font-size: 9.5px; color: #333; line-height: 1.45; margin-top: 1px; }
+  .doctitle { text-align: center; font-size: 12.5px; font-weight: 800; letter-spacing: 1px; margin-top: 6px; }
+  .docmeta { text-align: center; font-size: 10px; color: #222; margin-top: 2px; line-height: 1.55; }
+  .dashed { border-top: 1px dashed #000; margin: 5px 0; }
+  .kv { display: flex; justify-content: space-between; font-size: 11px; padding: 1.5px 0; gap: 6px; }
+  .kv .mid { color: #444; }
+  .itemname { font-weight: 700; font-size: 11px; line-height: 1.35; }
+  .itemsku { font-size: 9px; color: #444; }
+  .itemline { display: flex; justify-content: space-between; font-size: 11px; gap: 6px; }
+  .totbig { display: flex; justify-content: space-between; align-items: center;
+            border-top: 3px double #000; border-bottom: 3px double #000;
+            padding: 5px 0; margin-top: 5px; }
+  .totbig .k { font-size: 13px; font-weight: 800; }
+  .totbig .v { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .words { text-align: center; font-size: 9.5px; color: #333; margin-top: 4px; line-height: 1.45; }
+  .foot { text-align: center; margin-top: 8px; font-size: 11px; font-weight: 700; }
+  .footsmall { text-align: center; font-size: 8.5px; color: #666; margin-top: 2px; }
+  .sec-title { font-weight: 800; font-size: 11.5px; margin: 7px 0 2px 0; }
+  .thead { display: flex; justify-content: space-between; font-size: 10px; font-weight: 800;
+           border-bottom: 1px solid #000; padding: 2px 0; gap: 6px;
+           text-transform: uppercase; letter-spacing: 0.4px; }
+  .trio { display: flex; justify-content: space-between; font-size: 10.5px; padding: 1.5px 0; gap: 6px; }
+  .trio-l { flex: 1; text-align: left; font-weight: 600; }
+  .trio-m { flex: 0 0 32px; text-align: center; }
+  .trio-r { flex: 0 0 62px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .summary-line { font-size: 11px; font-weight: 700; padding: 1.5px 0; }
+  .voidbanner { text-align: center; border: 2px solid #DC2626; color: #DC2626;
+                font-weight: 800; font-size: 12px; padding: 4px; margin-bottom: 5px; }
+`;
+}
+
+/** Renders 3-cell rows ([left, mid, right]) as receipt lines. */
+function thermalRows(list) {
+  return (list || []).map((row) => {
+    if (row && typeof row === 'object' && row.type === 'separator') {
+      return '<div class="dashed"></div>';
+    }
+    const [a, b, c] = row || [];
+    const left = escHtml(a || '') + (b ? ` <span class="mid">(${escHtml(b)})</span>` : '');
+    return `<div class="kv"><span>${left}</span><b>${escHtml(c || '')}</b></div>`;
+  }).join('\n');
+}
+
+/** Renders 3-column product rows (name, qty, amount) with aligned columns. */
+function thermalTrioRows(list) {
+  return (list || []).map((row) => {
+    if (row && typeof row === 'object' && row.type === 'separator') {
+      return '<div class="dashed"></div>';
+    }
+    const [name, qty, amt] = row || [];
+    return `<div class="trio"><span class="trio-l">${escHtml(name || '')}</span><span class="trio-m">${escHtml(qty || '')}</span><span class="trio-r">${escHtml(amt || '')}</span></div>`;
+  }).join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Headless-browser PDF renderer
 // ---------------------------------------------------------------------------
 function cleanupDir(dir) {
@@ -452,6 +521,114 @@ function cleanupDir(dir) {
   } catch {
     /* best-effort */
   }
+}
+
+/** Thermal-width sales report (shop header, rows as receipt lines, summary). */
+function buildThermalReportHtml(opts) {
+  const {
+    title, businessName, businessMeta = '', periodLabel, metaLabel, headerLines,
+    rows, summaryLines = [], lang = 'en', extraSections = [], widthMm = 58,
+  } = opts;
+  const fontFace = getDevanagariFontFace();
+  const theadHtml = (headerLines && headerLines.length >= 2)
+    ? `<div class="thead"><span>${escHtml(headerLines[0])}</span><span>${escHtml(headerLines[1] || '')}</span>${headerLines[2] ? `<span>${escHtml(headerLines[2])}</span>` : ''}</div>\n`
+    : '';
+  const sectionsHtml = (extraSections || []).map((sec) => {
+    const sh = (sec.header && sec.header.length >= 2)
+      ? `<div class="thead"><span>${escHtml(sec.header[0] || '')}</span><span>${escHtml(sec.header[1] || '')}</span>${sec.header[2] ? `<span>${escHtml(sec.header[2] || '')}</span>` : ''}</div>\n`
+      : '';
+    const body = sec.trio ? thermalTrioRows(sec.rows) : thermalRows(sec.rows);
+    return `\n  <div class="sec-title">${escHtml(sec.heading || '')}</div>\n${sh}${body}`;
+  }).join('\n');
+  const summaryHtml = (summaryLines || [])
+    .map((s) => `<div class="summary-line">${escHtml(s)}</div>`)
+    .join('');
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>${thermalPageCss(widthMm, fontFace)}</style></head><body>
+  <div class="shopname">${escHtml(businessName)}</div>
+  ${businessMeta ? `<div class="shopmeta">${escHtml(businessMeta)}</div>` : ''}
+  <div class="dashed"></div>
+  <div class="doctitle">${escHtml(title)}</div>
+  <div class="docmeta">${escHtml(t(lang, 'period'))}: ${escHtml(periodLabel)}<br/>${escHtml(t(lang, 'generatedOn'))}: ${escHtml(metaLabel)}</div>
+  <div class="dashed"></div>
+${theadHtml}${thermalRows(rows)}
+${sectionsHtml}
+  ${summaryHtml ? `<div class="dashed"></div>${summaryHtml}` : ''}
+  <div class="dashed"></div>
+  <div class="foot">धन्यवाद! Thank You!</div>
+  <div class="footsmall">Powered by BillMitra</div>
+</body></html>`;
+}
+
+/** Thermal-width TAX INVOICE / receipt (product name + qty + rate + amount). */
+function buildThermalBillHtml({ business, bill, lang = 'en', widthMm = 58 }) {
+  const fontFace = getDevanagariFontFace();
+  const isMr = lang === 'mr';
+  const both = lang === 'both';
+  const B = (en, mr) => (isMr ? mr : both ? `${en} (${mr})` : en);
+
+  const bizName = business?.businessName || 'BillMitra';
+  const addr = [
+    business?.addressLine,
+    [business?.city, business?.pincode].filter(Boolean).join(' - '),
+  ].filter(Boolean).join(', ');
+  const phone = business?.phone ? `Ph: ${business.phone}` : '';
+
+  const dt = bill.createdAt ? new Date(bill.createdAt) : new Date();
+  const dateStr = Number.isNaN(dt.getTime())
+    ? ''
+    : dt.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const items = Array.isArray(bill.items) ? bill.items : [];
+  const itemsHtml = items.map((it) => {
+    const amt = Number(it.lineAmount ?? Number(it.quantity || 0) * Number(it.unitPrice || 0));
+    const gstPct = Number(it.taxRate || 0);
+    const qtyPart = `${fmtInt(it.quantity)}${it.unit && it.unit !== 'PCS' ? ' ' + escHtml(it.unit) : ''} x ${fmtAmount(it.unitPrice)}`;
+    return `<div class="itemname">${escHtml(it.name)}</div>
+      ${it.sku ? `<div class="itemsku">${escHtml(it.sku)}</div>` : ''}
+      <div class="itemline"><span>${qtyPart}${gstPct ? ` +GST ${gstPct}%` : ''}</span><b>${fmtAmount(amt)}</b></div>`;
+  }).join('\n<div style="border-top:1px dotted #999;margin:4px 0"></div>\n');
+
+  const totalRows = [];
+  if (Number(bill.subtotal || 0) > 0 && Number(bill.cgst || 0) + Number(bill.sgst || 0) + Number(bill.igst || 0) > 0) {
+    totalRows.push(`<div class="kv"><span>${escHtml(B('Subtotal', 'एकूण'))}</span><b>${fmtAmount(bill.subtotal)}</b></div>`);
+  }
+  if (Number(bill.discount || 0) > 0) {
+    const dl = bill.discountType === 'PERCENT' ? `${B('Discount', 'सूट')} (${Number(bill.discount)}%)` : B('Discount', 'सूट');
+    totalRows.push(`<div class="kv"><span>${escHtml(dl)}</span><b>- ${fmtAmount(bill.discount)}</b></div>`);
+  }
+  if (Number(bill.cgst || 0) > 0) totalRows.push(`<div class="kv"><span>${escHtml(bt(lang, 'cgst'))}</span><b>${fmtAmount(bill.cgst)}</b></div>`);
+  if (Number(bill.sgst || 0) > 0) totalRows.push(`<div class="kv"><span>${escHtml(bt(lang, 'sgst'))}</span><b>${fmtAmount(bill.sgst)}</b></div>`);
+  if (Number(bill.igst || 0) > 0) totalRows.push(`<div class="kv"><span>${escHtml(bt(lang, 'igst'))}</span><b>${fmtAmount(bill.igst)}</b></div>`);
+
+  const grandTotal = Number(bill.totalAmount ?? bill.grandTotal ?? (bill.subtotal || 0));
+  let wordsHtml = '';
+  if (isMr) wordsHtml = amountToWordsMr(grandTotal);
+  else if (both) wordsHtml = `${amountToWordsEn(grandTotal)} / ${amountToWordsMr(grandTotal)}`;
+  else wordsHtml = amountToWordsEn(grandTotal);
+
+  const methodKey = String(bill.paymentMethod || 'OTHER').toUpperCase();
+  const methodLabel = bt(lang, { CASH: 'cash', UPI: 'upi', CARD: 'card', OTHER: 'other' }[methodKey] || 'other');
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><style>${thermalPageCss(widthMm, fontFace)}</style></head><body>
+  ${bill.isVoided ? '<div class="voidbanner">** VOIDED (रद्द) **</div>' : ''}
+  <div class="shopname">${escHtml(bizName)}</div>
+  ${addr || phone ? `<div class="shopmeta">${escHtml([addr, phone].filter(Boolean).join(' | '))}</div>` : ''}
+  <div class="dashed"></div>
+  <div class="doctitle">${escHtml(B('TAX INVOICE', 'बिल'))}</div>
+  <div class="docmeta">${escHtml(B('Invoice', 'बिल क्र.'))}: ${escHtml(bill.invoiceNumber || bill.billNumber || '-')}<br/>
+    ${escHtml(dateStr)} &nbsp;|&nbsp; ${escHtml(methodLabel)}</div>
+  ${bill.customerName ? `<div class="docmeta">${escHtml(B('Customer', 'ग्राहक'))}: ${escHtml(bill.customerName)}</div>` : ''}
+  <div class="dashed"></div>
+${itemsHtml}
+  <div class="dashed"></div>
+${totalRows.join('\n')}
+  <div class="totbig"><span class="k">${escHtml(B('TOTAL', 'एकूण'))}</span><span class="v">${fmtAmount(grandTotal)}</span></div>
+  ${wordsHtml ? `<div class="words">${escHtml(wordsHtml)}</div>` : ''}
+  <div class="foot">धन्यवाद! Thank You!</div>
+  <div class="footsmall">Powered by BillMitra</div>
+</body></html>`;
 }
 
 function sleepMs(ms) {
@@ -853,4 +1030,36 @@ async function buildReportPdf({ title, businessName, businessMeta = '', periodLa
   }
 }
 
-module.exports = { buildReportPdf, buildReportHtml, buildBillPdf, buildBillHtml, fmtAmount, fmtInt, t };
+/**
+ * Build a thermal-width (58mm/80mm) PDF sales report — receipt style.
+ * @param {object} opts - same as buildReportPdf plus widthMm (58|80)
+ * @returns {Promise<Buffer>}
+ */
+async function buildThermalReportPdf(opts) {
+  const { widthMm = 58, ...rest } = opts || {};
+  try {
+    const html = buildThermalReportHtml({ ...rest, widthMm });
+    return await renderHtmlToPdf(html);
+  } catch (e) {
+    console.error('[pdfReportService] thermal report Edge render failed:', e && e.message ? e.message : e);
+    return buildAsciiPdfFallback({ businessName: rest.businessName, title: rest.title, periodLabel: rest.periodLabel, rows: rest.rows });
+  }
+}
+
+/**
+ * Build a thermal-width (58mm/80mm) PDF tax invoice — receipt style with
+ * product name, quantity, rate and amount per item and a huge TOTAL.
+ * @param {object} opts { business, bill, lang, widthMm (58|80) }
+ * @returns {Promise<Buffer>}
+ */
+async function buildThermalBillPdf({ business, bill, lang = 'en', widthMm = 58 } = {}) {
+  try {
+    const html = buildThermalBillHtml({ business, bill, lang, widthMm });
+    return await renderHtmlToPdf(html);
+  } catch (e) {
+    console.error('[pdfReportService] thermal bill Edge render failed:', e && e.message ? e.message : e);
+    return buildBillAsciiFallback({ business, bill });
+  }
+}
+
+module.exports = { buildReportPdf, buildReportHtml, buildBillPdf, buildBillHtml, buildThermalReportPdf, buildThermalReportHtml, buildThermalBillPdf, buildThermalBillHtml, fmtAmount, fmtInt, t };

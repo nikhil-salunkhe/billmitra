@@ -19,6 +19,8 @@ const reportQuerySchema = z
     limit: z.coerce.number().int().min(1).max(50).optional(),
     // PDF report language: English | Marathi | both (English + मराठी).
     lang: z.enum(['en', 'mr', 'both']).optional(),
+    // PDF paper size: A4 or thermal 58/80 mm.
+    paper: z.enum(['a4', '58', '80']).optional(),
   })
   .superRefine((val, ctx) => {
     const period = val.period || 'this_month';
