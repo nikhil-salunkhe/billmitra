@@ -3,6 +3,11 @@
 const { success, created } = require('../utils/ApiResponse');
 const { asyncHandler } = require('../utils/asyncHandler');
 const billingService = require('../services/billingService');
+const pdfReportService = require('../services/pdfReportService');
+const Business = require('../models/Business');
+
+/** Valid bill PDF languages. */
+const PDF_LANGS = ['en', 'mr', 'both'];
 
 /**
  * POST /api/bills
@@ -30,6 +35,32 @@ const listBills = asyncHandler(async (req, res) => {
 const getBill = asyncHandler(async (req, res) => {
   const bill = await billingService.getBill(req.businessId, req.params.id);
   return success(res, { bill: bill.toSafeJSON() }, 'Bill retrieved');
+});
+
+/**
+ * GET /api/bills/:id/pdf?lang=en|mr|both
+ * Streams a professional bilingual (English + Marathi) A4 TAX INVOICE PDF with
+ * product name, quantity, rate, GST%and amount columns plus a clear TOTAL.
+ * Bypasses the JSON envelope and returns octet-stream with Content-Disposition.
+ */
+const getBillPdf = asyncHandler(async (req, res) => {
+  const lang = PDF_LANGS.includes(req.query.lang) ? req.query.lang : 'both';
+  const bill = await billingService.getBill(req.businessId, req.params.id);
+  const business = await Business.findById(req.businessId).select(
+    'businessName addressLine city pincode phone gstNumber'
+  );
+  const buf = await pdfReportService.buildBillPdf({
+    business: business ? business.toObject() : {},
+    bill: bill.toSafeJSON(),
+    lang,
+  });
+  const safeNo = String(bill.invoiceNumber || 'bill').replace(/[^A-Za-z0-9_-]/g, '');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="billmitra-${safeNo}-${lang}.pdf"`
+  );
+  return res.send(buf);
 });
 
 const reprintBill = asyncHandler(async (req, res) => {
@@ -66,4 +97,4 @@ const permanentDeleteBill = asyncHandler(async (req, res) => {
   return success(res, { deleted: true, invoiceNumber: bill.invoiceNumber }, 'Bill permanently deleted');
 });
 
-module.exports = { createBill, listBills, getBill, deleteBill, reprintBill, permanentDeleteBill };
+module.exports = { createBill, listBills, getBill, getBillPdf, deleteBill, reprintBill, permanentDeleteBill };

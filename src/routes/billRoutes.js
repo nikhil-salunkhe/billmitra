@@ -20,6 +20,7 @@ router.use(authenticateToken, requireTenant, requireBusinessOwner);
 
 router.post('/', validate(createBillSchema), requireBilling, billController.createBill);
 router.get('/', validate(listBillsQuerySchema, 'query'), billController.listBills);
+router.get('/:id/pdf', billController.getBillPdf);
 router.get('/:id', billController.getBill);
 router.post('/:id/reprint', billController.reprintBill);
 router.delete('/:id', billController.deleteBill);
