@@ -8,7 +8,7 @@ const StockTransaction = require('../models/StockTransaction');
 const BusinessSettings = require('../models/BusinessSettings');
 const { ApiError } = require('../utils/ApiError');
 const { runInTransaction } = require('../utils/transactionHelper');
-const { computeLineTotals, computeBillTotals, TAX_MODE } = require('../utils/taxUtils');
+const { computeLineTotals, computeBillTotals, round2, TAX_MODE } = require('../utils/taxUtils');
 const invoiceNumberService = require('./invoiceNumberService');
 const { PAYMENT_METHODS, STOCK_TRANSACTION_TYPES } = require('../config/constants');
 
@@ -107,14 +107,33 @@ async function createBill(businessId, businessType, userId, payload) {
     ...computeLineTotals(product.sellingPrice, quantity, product.taxRate, ctx.taxMode),
   }));
 
+  // Whole-bill discount. Supports either a fixed amount (default) or a
+  // percentage of the subtotal (regular customers / relatives & friends).
+  const subtotal = round2(computed.reduce((s, l) => s + l.lineAmount, 0));
+  const discountType = payload.discountType === 'PERCENT' ? 'PERCENT' : 'AMOUNT';
+  const rawDiscount = Number(payload.discount) || 0;
+
+  if (rawDiscount < 0) {
+    throw ApiError.badRequest('Discount cannot be negative', 'INVALID_DISCOUNT');
+  }
+
+  let discountAmount;
+  if (discountType === 'PERCENT') {
+    if (rawDiscount > 100) {
+      throw ApiError.badRequest('Discount percentage cannot exceed 100', 'INVALID_DISCOUNT');
+    }
+    discountAmount = round2((subtotal * rawDiscount) / 100);
+  } else {
+    discountAmount = round2(rawDiscount);
+  }
+  if (discountAmount >= subtotal && subtotal > 0) {
+    throw ApiError.badRequest('Discount cannot equal or exceed the bill total', 'INVALID_DISCOUNT');
+  }
+
   const totals = computeBillTotals(
     computed.map((l) => ({ lineAmount: l.lineAmount, cgst: l.cgst, sgst: l.sgst, igst: l.igst })),
-    payload.discount
+    discountAmount
   );
-
-  if (payload.discount > 0 && totals.discount === 0) {
-    throw ApiError.badRequest('Discount must be a positive number', 'INVALID_DISCOUNT');
-  }
 
   // 4. Stock availability check before any writes.
   for (const line of computed) {
@@ -168,6 +187,7 @@ async function persistBill({ businessId, businessType, userId, payload, ctx, com
           })),
           subtotal: totals.subtotal,
           discount: totals.discount,
+          discountType: payload.discountType === 'PERCENT' ? 'PERCENT' : 'AMOUNT',
           taxableAmount: totals.taxableAmount,
           cgst: totals.cgst,
           sgst: totals.sgst,

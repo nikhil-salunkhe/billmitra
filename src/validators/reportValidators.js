@@ -17,6 +17,8 @@ const reportQuerySchema = z
     tzOffsetMinutes: z.coerce.number().int().min(-720).max(840).optional(),
     groupBy: z.enum(['day', 'month']).optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
+    // PDF report language: English | Marathi | both (English + मराठी).
+    lang: z.enum(['en', 'mr', 'both']).optional(),
   })
   .superRefine((val, ctx) => {
     const period = val.period || 'this_month';

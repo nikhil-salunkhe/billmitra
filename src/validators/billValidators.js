@@ -19,7 +19,10 @@ const billItemSchema = z
 const createBillSchema = z
   .object({
     items: z.array(billItemSchema).min(1, 'At least one item is required').max(200),
+    // Whole-bill discount. `discount` is either an amount (default) or a
+    // percentage when discountType === 'PERCENT' (server converts to amount).
     discount: z.coerce.number().min(0).optional(),
+    discountType: z.enum(['AMOUNT', 'PERCENT']).optional(),
     paymentMethod: z.enum(Object.values(PAYMENT_METHODS)),
     customerName: z.string().trim().max(80).optional(),
     customerPhone: z.string().trim().max(20).optional(),

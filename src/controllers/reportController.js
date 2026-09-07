@@ -7,6 +7,9 @@ const reportService = require('../services/reportService');
 const pdfReportService = require('../services/pdfReportService');
 const Business = require('../models/Business');
 
+/** Valid report languages. */
+const PDF_LANGS = ['en', 'mr', 'both'];
+
 /**
  * GET /api/reports/dashboard — owner dashboard overview.
  * Tenant-scoped to req.businessId.
@@ -60,12 +63,13 @@ const paymentsReport = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/reports/pdf?type=sales|products|payments&period=...
- * Streams a PDF report (ASCII text) for the owner. Bypasses the JSON envelope
- * and returns octet-stream with a Content-Disposition filename.
+ * GET /api/reports/pdf?type=sales|products|payments&period=...&lang=en|mr|both
+ * Streams a beautiful bilingual (English + Marathi) PDF report for the owner.
+ * Bypasses the JSON envelope and returns octet-stream with a Content-Disposition.
  */
 const pdfReport = asyncHandler(async (req, res) => {
   const type = req.query.type || 'sales';
+  const lang = PDF_LANGS.includes(req.query.lang) ? req.query.lang : 'en';
   const range = reportService.getReportRange(req.query);
   const business = await Business.findById(req.businessId).select('businessName');
   const businessName = business?.businessName || 'Business';
@@ -73,12 +77,18 @@ const pdfReport = asyncHandler(async (req, res) => {
   const isValid = ['sales', 'products', 'payments'].includes(type);
   if (!isValid) throw ApiError.badRequest('Invalid report type', 'INVALID_REPORT_TYPE');
 
-  const periodPretty = req.query.period || 'custom';
   const fromStr = range.start.toISOString().slice(0, 10);
   const toStr = range.end.toISOString().slice(0, 10);
   const periodLabel = `${fromStr} to ${toStr}`;
+  const metaLabel = new Date().toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
-  let title;
+  const { t, fmtAmount, fmtInt } = pdfReportService;
   let headerLines;
   let rows = [];
   let summaryLines = [];
@@ -86,60 +96,72 @@ const pdfReport = asyncHandler(async (req, res) => {
   if (type === 'sales' || type === 'payments') {
     const sales = await reportService.getSalesReport(req.businessId, range, req.query.groupBy || 'day');
     const totals = sales.totals || {};
-    title = type === 'sales' ? 'Sales Report' : 'Payment Report';
-    headerLines = ['Item', '', 'Amount'];
 
     if (type === 'sales') {
       rows = [
-        ['Gross Sales', '', pdfReportService.fmtAmount(totals.grossSales)],
-        ['Discounts', '', pdfReportService.fmtAmount(totals.discount)],
-        ['Tax (GST)', '', pdfReportService.fmtAmount(totals.totalTax)],
-        ['Net Sales', '', pdfReportService.fmtAmount(totals.netSales)],
+        [t(lang, 'grossSales'), '', fmtAmount(totals.grossSales)],
+        [t(lang, 'discounts'), '', fmtAmount(totals.discount)],
+        [t(lang, 'tax'), '', fmtAmount(totals.totalTax)],
+        [t(lang, 'netSales'), '', fmtAmount(totals.netSales)],
+        { type: 'separator' },
+        [t(lang, 'dateDay'), t(lang, 'bills'), t(lang, 'netSales')],
       ];
+      for (const s of sales.series || []) {
+        rows.push([s.label, fmtInt(s.bills), fmtAmount(s.net)]);
+      }
       summaryLines = [
-        `Bills: ${pdfReportService.fmtInt(totals.bills)}   Items Sold: ${pdfReportService.fmtInt(totals.itemsSold)}`,
-        `Average Bill: ${pdfReportService.fmtAmount(totals.bills ? totals.netSales / totals.bills : 0)}`,
+        `${t(lang, 'bills')}: ${fmtInt(totals.bills)}   ${t(lang, 'itemsSold')}: ${fmtInt(totals.itemsSold)}`,
       ];
+      headerLines = [t(lang, 'description'), t(lang, 'bills'), t(lang, 'amount')];
     } else {
       rows = (sales.byMethod || []).map((m) => [
         String(m.method || 'OTHER'),
-        '',
-        pdfReportService.fmtAmount(m.amount) + `  (${m.count} bills)`,
+        `${fmtInt(m.count)} ${t(lang, 'bills')}`,
+        fmtAmount(m.amount),
       ]);
-      if (rows.length === 0) rows.push(['No payments in period', '', 'Rs. 0.00']);
+      if (rows.length === 0) {
+        rows.push([t(lang, 'noPayments'), '', '₹0.00']);
+      }
+      rows.push({ type: 'separator' });
+      rows.push([t(lang, 'dateDay'), t(lang, 'bills'), t(lang, 'netSales')]);
+      for (const s of sales.series || []) {
+        rows.push([s.label, fmtInt(s.bills), fmtAmount(s.net)]);
+      }
       summaryLines = [
-        `Total Bills: ${pdfReportService.fmtInt(totals.bills)}   Net Sales: ${pdfReportService.fmtAmount(totals.netSales)}`,
+        `${t(lang, 'totalBills')}: ${fmtInt(totals.bills)}   ${t(lang, 'netSales')}: ${fmtAmount(totals.netSales)}`,
       ];
-    }
-
-    // Time series.
-    rows.push(['', '', '']);
-    rows.push(['Date / Day', '', 'Net Sales']);
-    for (const s of sales.series || []) {
-      rows.push([s.label, '', pdfReportService.fmtAmount(s.net)]);
+      headerLines = [t(lang, 'description'), t(lang, 'bills'), t(lang, 'amount')];
     }
   } else {
     // products
     const topProducts = await reportService.getTopProducts(req.businessId, range, req.query.limit);
-    title = 'Top Products Report';
-    headerLines = ['Product', 'Qty', 'Revenue'];
-    rows = (topProducts || []).map((p) => [p.name, String(p.quantity), pdfReportService.fmtAmount(p.revenue)]);
-    if (rows.length === 0) rows.push(['No products sold in this period', '', '']);
+    rows = (topProducts || []).map((p) => [p.name, fmtInt(p.quantity), fmtAmount(p.revenue)]);
+    if (rows.length === 0) rows.push([t(lang, 'noProducts'), '', '']);
+    headerLines = [t(lang, 'product'), t(lang, 'qty'), t(lang, 'revenue')];
   }
 
-  const buf = pdfReportService.buildReportPdf({
+  const title =
+    type === 'sales'
+      ? t(lang, 'salesReport')
+      : type === 'payments'
+        ? t(lang, 'paymentReport')
+        : t(lang, 'topProducts');
+
+  const buf = await pdfReportService.buildReportPdf({
     title,
     businessName,
     periodLabel,
+    metaLabel,
     headerLines,
     rows,
     summaryLines,
+    lang,
   });
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="billmitra-${type}-report.pdf"`
+    `attachment; filename="billmitra-${type}-${lang}-report.pdf"`
   );
   return res.send(buf);
 });

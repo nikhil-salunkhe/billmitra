@@ -45,6 +45,8 @@ const billSchema = new mongoose.Schema(
 
     subtotal: { type: Number, required: true, min: 0 },
     discount: { type: Number, required: true, min: 0, default: 0 },
+    // How the stored discount was expressed at sale time (amount vs percent).
+    discountType: { type: String, enum: ['AMOUNT', 'PERCENT'], default: 'AMOUNT' },
     taxableAmount: { type: Number, required: true, min: 0 },
     cgst: { type: Number, required: true, min: 0 },
     sgst: { type: Number, required: true, min: 0 },
@@ -119,6 +121,7 @@ billSchema.methods.toSafeJSON = function toSafeJSON() {
     })),
     subtotal: this.subtotal,
     discount: this.discount,
+    discountType: this.discountType || 'AMOUNT',
     // Alias: discount as shown on the receipt.
     discountAmount: this.discount,
     taxableAmount: this.taxableAmount,
