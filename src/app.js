@@ -24,6 +24,8 @@ const stockRoutes = require('./routes/stockRoutes');
 const customerRoutes = require('./routes/customerRoutes');
 const paymentController = require('./controllers/paymentController');
 const paymentRoutes = require('./routes/paymentRoutes');
+const syncRoutes = require('./routes/syncRoutes');
+const deviceRoutes = require('./routes/deviceRoutes');
 
 /**
  * Builds and configures the Express application.
@@ -125,6 +127,8 @@ function createApp() {
   app.use('/api/bills', billRoutes);
   app.use('/api/stock', stockRoutes);
   app.use('/api/customers', customerRoutes);
+  app.use('/api/sync', syncRoutes);
+  app.use('/api/devices', deviceRoutes);
 
   // 404 + centralized error handling (must be last).
   app.use(notFound);

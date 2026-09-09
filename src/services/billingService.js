@@ -200,6 +200,12 @@ async function persistBill({ businessId, businessType, userId, payload, ctx, com
           notes: payload.notes || '',
           createdBy: userId,
           idempotencyKey: payload.idempotencyKey,
+          // Offline sync provenance (Phase 4: pushed from a device queue).
+          clientBillId: payload.clientBillId || null,
+          deviceId: payload.deviceId || null,
+          // Preserve the original offline creation time — never replace a bill's
+          // historical date with the sync timestamp.
+          ...(payload.billCreatedAt ? { createdAt: new Date(payload.billCreatedAt) } : {}),
         },
       ],
       { session }

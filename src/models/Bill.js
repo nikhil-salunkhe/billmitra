@@ -72,6 +72,11 @@ const billSchema = new mongoose.Schema(
     // Duplicate-submission protection (client-generated request id).
     idempotencyKey: { type: String, required: true },
 
+    // Offline sync provenance — which device created this bill offline and
+    // the client's own UUID (used as an additional idempotency anchor).
+    clientBillId: { type: String, trim: true, default: null, index: true },
+    deviceId: { type: String, trim: true, default: null },
+
     reprintCount: { type: Number, default: 0 },
     lastReprintAt: { type: Date, default: null },
 
@@ -88,6 +93,13 @@ const billSchema = new mongoose.Schema(
 
 billSchema.index({ businessId: 1, invoiceNumber: 1 }, { unique: true });
 billSchema.index({ businessId: 1, idempotencyKey: 1 }, { unique: true });
+// Only bills that carry a client UUID get the unique index — rows with null
+// clientBillId (all historical/online bills) must not collide with each other.
+billSchema.index(
+  { businessId: 1, clientBillId: 1 },
+  { unique: true, partialFilterExpression: { clientBillId: { $type: 'string' } } }
+);
+billSchema.index({ businessId: 1, deviceId: 1 });
 billSchema.index({ businessId: 1, createdAt: -1 });
 
 billSchema.methods.toSafeJSON = function toSafeJSON() {
