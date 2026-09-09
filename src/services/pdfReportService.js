@@ -1,1065 +1,466 @@
-'use strict';
+﻿'use strict';
 
 /**
- * Beautiful bilingual (English + मराठी) PDF report builder.
- *
- * Primary renderer: headless Microsoft Edge (bundled on Windows) converts a
- * fully-styled HTML report to a PDF. HTML/CSS give us proper Devanagari text
- * shaping (conjuncts + matras), a correct multi-column table, Indian number
- * grouping and a professional look — no binary PDF libraries needed.
- *
- * Fallback renderer: a dependency-free ASCII PDF writer (only used when no
- * Chromium/Edge is found), so the API is resilient on servers without a browser.
+ * Production PDF generator - English only.
+ * Three document types: 58mm receipt, A4 bill, A4 report.
+ * Uses pdfkit (pure JS, works on Render/Linux).
  */
 
-const childProcess = require('child_process');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const PDFDocument = require('pdfkit');
+const { formatCurrency, formatQuantity, formatDate, formatTime, amountToWords } = require('../utils/pdfFormat');
 
-// ---------------------------------------------------------------------------
-// Language strings (English + Marathi). 'both' joins them as "en (मराठी)".
-// ---------------------------------------------------------------------------
-const T = {
-  en: {
-    report: 'Report',
-    salesReport: 'Sales Report',
-    paymentReport: 'Payment Report',
-    topProducts: 'Top Products Report',
-    period: 'Period',
-    generatedOn: 'Generated on',
-    description: 'Description',
-    details: 'Details',
-    amount: 'Amount',
-    grossSales: 'Gross Sales',
-    discounts: 'Discount',
-    tax: 'Tax (GST)',
-    netSales: 'Net Sales',
-    bills: 'Bills',
-    itemsSold: 'Items Sold',
-    product: 'Product',
-    qty: 'Qty',
-    revenue: 'Revenue',
-    dateDay: 'Date / Day',
-    totalBills: 'Total Bills',
-    count: 'Count',
-    noPayments: 'No payments in this period',
-    noProducts: 'No products sold in this period',
-    thisWeek: 'This Week',
-    today: 'Today',
-    thisMonth: 'This Month',
-    bill: {
-      invoice: 'TAX INVOICE',
-      billNo: 'Bill No',
-      date: 'Date',
-      customer: 'Customer',
-      phone: 'Phone',
-      itemsLabel: 'Items',
-      sl: '#',
-      item: 'Item',
-      qty: 'Qty',
-      rate: 'Rate',
-      gst: 'GST',
-      amount: 'Amount',
-      subtotal: 'Subtotal',
-      discount: 'Discount',
-      taxable: 'Taxable Amount',
-      cgst: 'CGST',
-      sgst: 'SGST',
-      igst: 'IGST',
-      totalTax: 'Total Tax',
-      total: 'TOTAL',
-      amountInWords: 'Amount in Words',
-      payment: 'Payment',
-      status: 'Status',
-      paid: 'PAID',
-      unpaid: 'UNPAID',
-      voided: 'VOIDED',
-      voidedNote: 'This bill has been cancelled.',
-      thankYou: 'Thank you for your business!',
-      computerNote: 'This is a computer generated invoice.',
-      poweredBy: 'Powered by BillMitra',
-      walkIn: 'Walk-in Customer',
-      cash: 'Cash',
-      upi: 'UPI',
-      card: 'Card',
-      other: 'Other',
-      rupees: 'Rupees',
-      paise: 'Paise',
-      only: 'Only',
-    },
-  },
-  mr: {
-    report: 'अहवाल',
-    salesReport: 'विक्री अहवाल',
-    paymentReport: 'पेमेंट अहवाल',
-    topProducts: 'सर्वोत्तम उत्पादने अहवाल',
-    period: 'कालावधी',
-    generatedOn: 'तारीख',
-    description: 'वर्णन',
-    details: 'तपशील',
-    amount: 'रक्कम',
-    grossSales: 'एकूण विक्री',
-    discounts: 'सूट',
-    tax: 'कर (जीएसटी)',
-    netSales: 'निव्वळ विक्री',
-    bills: 'बिले',
-    itemsSold: 'विक्री झालेल्या वस्तू',
-    product: 'उत्पादन',
-    qty: 'प्रमाण',
-    revenue: 'एकूण कमाई',
-    dateDay: 'तारीख / दिवस',
-    totalBills: 'एकूण बिले',
-    count: 'संख्ये',
-    noPayments: 'या कालावधीत पेमेंट नाही',
-    noProducts: 'या कालावधीत विक्री नाही',
-    thisWeek: 'हा आठवडा',
-    today: 'आज',
-    thisMonth: 'हा महिना',
-    bill: {
-      invoice: 'टॅक्स इनव्हॉइस',
-      billNo: 'बिल क्र.',
-      date: 'दिनांक',
-      customer: 'ग्राहक',
-      phone: 'मोबाईल',
-      itemsLabel: 'वस्तू',
-      sl: 'क्र.',
-      item: 'वस्तू',
-      qty: 'प्रमाण',
-      rate: 'दर',
-      gst: 'जीएसटी',
-      amount: 'रक्कम',
-      subtotal: 'एकूण रक्कम',
-      discount: 'सूट',
-      taxable: 'करपात्र रक्कम',
-      cgst: 'सीजीएसटी',
-      sgst: 'एसजीएसटी',
-      igst: 'आयजीएसटी',
-      totalTax: 'एकूण कर',
-      total: 'एकूण',
-      amountInWords: 'रक्कम अक्षरी',
-      payment: 'पेमेंट',
-      status: 'स्थिती',
-      paid: 'पैसे दिले',
-      unpaid: 'बाकी',
-      voided: 'रद्द',
-      voidedNote: 'हे बिल रद्द करण्यात आले आहे.',
-      thankYou: 'व्यवसायाबद्दल धन्यवाद!',
-      computerNote: 'ही संगणकावर तयार केलेली पावती आहे.',
-      poweredBy: 'बिलमित्र द्वारे समर्थित',
-      walkIn: 'सामान्य ग्राहक',
-      cash: 'रोख',
-      upi: 'यूपीआय',
-      card: 'कार्ड',
-      other: 'इतर',
-      rupees: 'रुपये',
-      paise: 'पैसे',
-      only: 'फक्त',
-    },
-  },
-};
+const MM = (mm) => mm * 2.83465;
+const PAGE = { RECEIPT: { width: MM(58), height: MM(297), margins: { top: 3, bottom: 3, left: 3, right: 3 } }, A4: { width: MM(210), height: MM(297), margins: { top: 15, bottom: 15, left: 15, right: 15 } } };
+const C = { black: '#000000', dark: '#1F2937', medium: '#4B5563', light: '#9CA3AF', line: '#D1D5DB', accent: '#2563EB', grandBg: '#F3F4F6', voidBg: '#FEF2F2', voidText: '#DC2626', headerBg: '#F8F9FA' };
 
-/** Resolve a label for the requested language. */
-function t(lang, key) {
-  const en = T.en[key] || key;
-  const mr = T.mr[key];
-  if (!mr || mr === en) return en;
-  if (lang === 'mr') return mr;
-  if (lang === 'both') return `${en} (${mr})`;
-  return en;
-}
+function drawLine(doc, x1, y1, x2, y2, color, width) { doc.save().strokeColor(color || C.line).lineWidth(width || 0.5).moveTo(x1, y1).lineTo(x2, y2).stroke().restore(); }
+function drawDashedLine(doc, x1, y1, x2, y2, color) { doc.save().strokeColor(color || C.line).lineWidth(0.5).dash(2, { space: 2 }).moveTo(x1, y1).lineTo(x2, y2).stroke().undash().restore(); }
+var _scratch = null;
+function measureWidth(text, font, fontSize) { if (!_scratch) _scratch = new PDFDocument({ size: [1, 1], margin: 0 }); return _scratch.font(font).fontSize(fontSize).widthOfString(String(text || '')); }
+function wrapText(text, font, fontSize, maxWidth) { var words = String(text || '').split(/\s+/).filter(Boolean); var lines = []; var cur = ''; for (var wi = 0; wi < words.length; wi++) { var w = words[wi]; var test = cur ? cur + ' ' + w : w; if (measureWidth(test, font, fontSize) <= maxWidth) { cur = test; } else { if (cur) lines.push(cur); cur = w.length > 20 ? w.slice(0, 20) : w; } } if (cur) lines.push(cur); return lines.length ? lines : ['']; }
+function buildReceiptPdf(bill, business) {
+  var doc = new PDFDocument({ size: [PAGE.RECEIPT.width, PAGE.RECEIPT.height], margin: 0, bufferPages: true });
+  var chunks = [];
+  doc.on('data', function (c) { chunks.push(c); });
+  var p = PAGE.RECEIPT;
+  var x = p.margins.left;
+  var y = p.margins.top;
+  var w = p.width - p.margins.left - p.margins.right;
+  var fs = 7;
 
-/** Resolve a bill label for the requested language (bill section of T). */
-function bt(lang, key) {
-  const en = T.en.bill[key] || key;
-  const mr = T.mr.bill[key];
-  if (!mr || mr === en) return en;
-  if (lang === 'mr') return mr;
-  if (lang === 'both') return `${en} (${mr})`;
-  return en;
-}
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.black).text(business && business.businessName || 'Business', x, y, { width: w, align: 'center', characterSpacing: 0.5 });
+  y += 11;
+  if (business && business.address) { doc.font('Helvetica').fontSize(fs).fillColor(C.medium).text(business.address, x, y, { width: w, align: 'center' }); y += 9; }
+  if (business && business.phone) { doc.text('Ph: ' + business.phone, x, y, { width: w, align: 'center' }); y += 9; }
+  if (business && business.gstNumber) { doc.text('GSTIN: ' + business.gstNumber, x, y, { width: w, align: 'center' }); y += 9; }
 
-// ---------------------------------------------------------------------------
-// Amount in words (Indian numbering) — English + Marathi (Devanagari).
-// ---------------------------------------------------------------------------
-const EN_ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
-  'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-const EN_TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  y += 2;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 4;
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.black).text('TAX INVOICE', x, y, { width: w, align: 'center' });
+  y += 11;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
 
-function enTwo(n) {
-  if (n < 20) return EN_ONES[n];
-  const t = Math.floor(n / 10);
-  const o = n % 10;
-  return EN_TENS[t] + (o ? ' ' + EN_ONES[o] : '');
-}
-function enThree(n) {
-  const h = Math.floor(n / 100);
-  const r = n % 100;
-  return (h ? EN_ONES[h] + ' Hundred' + (r ? ' ' : '') : '') + (r ? enTwo(r) : '');
-}
-function integerToEnWords(num) {
-  if (num === 0) return 'Zero';
-  let n = Math.abs(Math.trunc(num));
-  const crore = Math.floor(n / 10000000); n %= 10000000;
-  const lakh = Math.floor(n / 100000); n %= 100000;
-  const thousand = Math.floor(n / 1000); n %= 1000;
-  const parts = [];
-  if (crore) parts.push(enTwo(crore) + ' Crore');
-  if (lakh) parts.push(enTwo(lakh) + ' Lakh');
-  if (thousand) parts.push(enTwo(thousand) + ' Thousand');
-  if (n) parts.push(enThree(n));
-  return parts.join(' ');
-}
+  doc.font('Helvetica').fontSize(fs).fillColor(C.dark);
+  var billNo = bill.billNumber || bill.invoiceNumber || '';
+  doc.text('Bill No: ' + billNo, x, y, { width: w }); y += 9;
+  doc.text('Date: ' + formatDate(bill.createdAt), x, y, { width: w }); y += 9;
+  doc.text('Time: ' + formatTime(bill.createdAt), x, y, { width: w }); y += 9;
+  if (bill.customerName) { doc.text('Customer: ' + bill.customerName, x, y, { width: w }); y += 9; }
+  if (bill.customerPhone) { doc.text('Mobile: ' + bill.customerPhone, x, y, { width: w }); y += 9; }
 
-const MR_1_99 = [
-  '', 'एक', 'दोन', 'तीन', 'चार', 'पाच', 'सहा', 'सात', 'आठ', 'नऊ', 'दहा',
-  'अकरा', 'बारा', 'तेरा', 'चौदा', 'पंधरा', 'सोळा', 'सतरा', 'अठरा', 'एकोणीस',
-  'वीस', 'एकवीस', 'बावीस', 'तेवीस', 'चोवीस', 'पंचवीस', 'सव्वीस', 'सत्तावीस', 'अठ्ठावीस', 'एकोणतीस',
-  'तीस', 'एकतीस', 'बत्तीस', 'तेहतीस', 'चौतीस', 'पस्तीस', 'छत्तीस', 'सदतीस', 'अडतीस', 'एकोणचाळीस',
-  'चाळीस', 'एकेचाळीस', 'बेचाळीस', 'त्रेचाळीस', 'चव्वेचाळीस', 'पंचेचाळीस', 'सेचाळीस', 'सत्तेचाळीस', 'अठ्ठेचाळीस', 'एकोणपन्नास',
-  'पन्नास', 'एक्कावन्न', 'बावन्न', 'त्रेपन्न', 'चोपन्न', 'पंचावन्न', 'छप्पन्न', 'सत्तावन्न', 'अठ्ठावन्न', 'एकोणसाठ',
-  'साठ', 'एकसष्ट', 'बासष्ट', 'त्रेसष्ट', 'चौसष्ट', 'पासष्ट', 'सहासष्ट', 'सदुसष्ट', 'अडुसष्ट', 'एकोणसत्तर',
-  'सत्तर', 'एक्काहत्तर', 'बाहत्तर', 'त्र्याहत्तर', 'चौर्याहत्तर', 'पंच्याहत्तर', 'शहात्तर', 'सत्याहत्तर', 'अठ्ठ्याहत्तर', 'एकोणऐंशी',
-  'ऐंशी', 'एक्क्याऐंशी', 'ब्याऐंशी', 'त्र्याऐंशी', 'चौऱ्याऐंशी', 'पंच्याऐंशी', 'शहाऐंशी', 'सत्त्याऐंशी', 'अठ्ठ्याऐंशी', 'एकोणनव्वद',
-  'नव्वद', 'एक्क्याण्णव', 'ब्याण्णव', 'त्र्याण्णव', 'चौऱ्याण्णव', 'पंच्याण्णव', 'शहाण्णव', 'सत्त्याण्णव', 'अठ्ठ्याण्णव', 'नव्व्याण्णव',
-];
-const MR_HUNDREDS = ['', 'शंभर', 'दोनशे', 'तीनशे', 'चारशे', 'पाचशे', 'सहाशे', 'सातशे', 'आठशे', 'नऊशे'];
+  y += 2;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
 
-function integerToMrWords(num) {
-  if (num === 0) return 'शून्य';
-  let n = Math.abs(Math.trunc(num));
-  const crore = Math.floor(n / 10000000); n %= 10000000;
-  const lakh = Math.floor(n / 100000); n %= 100000;
-  const thousand = Math.floor(n / 1000); n %= 1000;
-  const hundred = Math.floor(n / 100); n %= 100;
-  const parts = [];
-  if (crore) parts.push(MR_1_99[crore] + ' कोटी');
-  if (lakh) parts.push(MR_1_99[lakh] + ' लाख');
-  if (thousand) parts.push(MR_1_99[thousand] + ' हजार');
-  if (hundred) parts.push(MR_HUNDREDS[hundred]);
-  if (n) parts.push(MR_1_99[n]);
-  return parts.join(' ');
-}
-
-function amountToWordsEn(value) {
-  const num = Math.round(Number(value || 0) * 100) / 100;
-  const rupees = Math.floor(num);
-  const paise = Math.round((num - rupees) * 100);
-  let s = 'Rupees ' + integerToEnWords(rupees);
-  if (paise > 0) s += ' and ' + integerToEnWords(paise) + ' Paise';
-  return s + ' Only';
-}
-
-function amountToWordsMr(value) {
-  const num = Math.round(Number(value || 0) * 100) / 100;
-  const rupees = Math.floor(num);
-  const paise = Math.round((num - rupees) * 100);
-  let s = 'रुपये ' + integerToMrWords(rupees);
-  if (paise > 0) s += ' आणि ' + integerToMrWords(paise) + ' पैसे';
-  return s + ' फक्त';
-}
-
-// ---------------------------------------------------------------------------
-// Number formatting (Indian grouping: 1,23,456.78)
-// ---------------------------------------------------------------------------
-function groupIndian(intStr) {
-  if (!intStr) return '0';
-  const sign = intStr.startsWith('-') ? '-' : '';
-  let rest = intStr.replace('-', '');
-  if (rest.length <= 3) return sign + rest;
-  const last3 = rest.slice(-3);
-  rest = rest.slice(0, -3);
-  const parts = [last3];
-  while (rest.length > 0) {
-    parts.unshift(rest.slice(-2));
-    rest = rest.slice(0, -2);
+  var items = Array.isArray(bill.items) ? bill.items : [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var nameLines = wrapText(it.name || '', 'Helvetica', fs, w);
+    for (var nl = 0; nl < nameLines.length; nl++) { doc.font('Helvetica').fontSize(fs).fillColor(C.dark).text(nameLines[nl], x, y, { width: w }); y += 8.5; }
+    var qty = formatQuantity(it.quantity);
+    var rate = formatCurrency(it.unitPrice);
+    var amt = formatCurrency(it.lineAmount || (Number(it.quantity || 0) * Number(it.unitPrice || 0)));
+    doc.font('Helvetica').fontSize(fs).fillColor(C.dark);
+    doc.text(qty + ' x ' + rate, x, y, { width: w * 0.55 });
+    doc.text(amt, x + w * 0.55, y, { width: w * 0.45, align: 'right' });
+    y += 9;
   }
-  return sign + parts.join(',');
-}
 
-function fmtAmount(value, symbol = true) {
-  const num = Number(value || 0);
-  const sign = num < 0 ? '-' : '';
-  const abs = Math.abs(num).toFixed(2);
-  const [int, dec] = abs.split('.');
-  return `${sign}${symbol ? '₹' : 'Rs. '}${groupIndian(int)}.${dec}`;
-}
+  if (items.length) { y += 1; doc.font('Helvetica').fontSize(fs).fillColor(C.medium).text('Items: ' + items.length, x, y, { width: w }); y += 9; }
 
-function fmtInt(value) {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n)) return '0';
-  return groupIndian(String(Math.trunc(n)));
-}
+  y += 2;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
 
-// ---------------------------------------------------------------------------
-// HTML escaping
-// ---------------------------------------------------------------------------
-function escHtml(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-// ---------------------------------------------------------------------------
-// Devanagari font (Mangal) embedded as a data URI so rendering is portable.
-// Cached after first read.
-// ---------------------------------------------------------------------------
-let devanagariFontCss = null;
-const FONT_CANDIDATES = [
-  'C:\\Windows\\Fonts\\Mangal.ttf',
-  'C:\\Windows\\Fonts\\Nirmala.ttf',
-  'C:\\Windows\\Fonts\\Aparajita.ttf',
-  '/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf',
-];
+  var totalRow = function (label, value, bold, sz) {
+    var fz = sz || fs;
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fz).fillColor(C.dark);
+    doc.text(label, x, y, { width: w * 0.55 });
+    doc.text(value, x + w * 0.55, y, { width: w * 0.45, align: 'right' });
+    y += (bold ? 11 : 9);
+  };
 
-function getDevanagariFontFace() {
-  if (devanagariFontCss !== null) return devanagariFontCss;
-  for (const candidate of FONT_CANDIDATES) {
-    try {
-      const bytes = fs.readFileSync(candidate);
-      const b64 = Buffer.from(bytes).toString('base64');
-      devanagariFontCss = `@font-face{font-family:'Devanagari';src:url(data:font/ttf;base64,${b64}) format('truetype');}`;
-      return devanagariFontCss;
-    } catch {
-      /* try next */
+  if (bill.subtotal != null) totalRow('Subtotal', formatCurrency(bill.subtotal));
+  var disc = Number(bill.discountAmount || bill.discount || 0);
+  if (disc > 0) { var discLabel = bill.discountType === 'PERCENT' ? 'Discount ' + Number(bill.discount) + '%' : 'Discount'; totalRow(discLabel, '- ' + formatCurrency(disc)); }
+  if (Number(bill.taxableAmount || 0) > 0) totalRow('Taxable Amount', formatCurrency(bill.taxableAmount));
+  var cgst = Number(bill.cgst || 0), sgst = Number(bill.sgst || 0), igst = Number(bill.igst || 0);
+  if (cgst > 0) totalRow('CGST', formatCurrency(cgst));
+  if (sgst > 0) totalRow('SGST', formatCurrency(sgst));
+  if (igst > 0) totalRow('IGST', formatCurrency(igst));
+  if (Number(bill.totalTax || 0) > 0) totalRow('Total Tax', formatCurrency(bill.totalTax));
+
+  y += 2;
+  drawLine(doc, x, y, x + w, y, C.black, 0.8);
+  y += 4;
+  var grandTotal = bill.totalAmount || bill.grandTotal || 0;
+  totalRow('GRAND TOTAL', formatCurrency(grandTotal), true, 9);
+  y += 2;
+  drawLine(doc, x, y, x + w, y, C.black, 0.8);
+  y += 5;
+
+  if (bill.paidAmount != null) totalRow('Paid', formatCurrency(bill.paidAmount));
+  if (Number(bill.dueAmount || 0) > 0) totalRow('Due', formatCurrency(bill.dueAmount));
+  totalRow('Payment', bill.paymentMethod || '-');
+
+  y += 3;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
+  doc.font('Helvetica').fontSize(fs).fillColor(C.medium).text('Thank you! Visit Again.', x, y, { width: w, align: 'center' });
+  y += 9;
+  doc.font('Helvetica').fontSize(6).fillColor(C.light).text('Powered by BillMitra', x, y, { width: w, align: 'center' });
+
+  doc.end();
+  return new Promise(function (resolve, reject) { doc.on('end', function () { resolve(Buffer.concat(chunks)); }); doc.on('error', reject); });
+}
+function buildBillPdf(bill, business) {
+  var doc = new PDFDocument({ size: [PAGE.A4.width, PAGE.A4.height], margin: 0, bufferPages: true });
+  var chunks = [];
+  doc.on('data', function (c) { chunks.push(c); });
+  var p = PAGE.A4;
+  var x = p.margins.left;
+  var y = p.margins.top;
+  var w = p.width - p.margins.left - p.margins.right;
+
+  if (bill.isVoided) {
+    doc.save().fillColor(C.voidBg).rect(x, y, w, 22).fill().restore();
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.voidText).text('VOIDED - This bill has been cancelled.', x + 4, y + 6, { width: w - 8 });
+    y += 26;
+  }
+
+  var halfW = w / 2 - 5;
+  doc.font('Helvetica-Bold').fontSize(16).fillColor(C.dark).text(business && business.businessName || 'Business', x, y, { width: halfW });
+  var by = y + 20;
+  doc.font('Helvetica').fontSize(8).fillColor(C.medium);
+  if (business && business.address) { doc.text(business.address, x, by, { width: halfW }); by += 10; }
+  if (business && (business.city || business.state)) { doc.text([business.city, business.state, business.pincode].filter(Boolean).join(', '), x, by, { width: halfW }); by += 10; }
+  if (business && business.phone) { doc.text('Ph: ' + business.phone, x, by, { width: halfW }); by += 10; }
+  if (business && business.gstNumber) { doc.text('GSTIN: ' + business.gstNumber, x, by, { width: halfW }); by += 10; }
+
+  var hasGst = business && business.gstNumber && Number(bill.totalTax || 0) > 0;
+  doc.font('Helvetica-Bold').fontSize(18).fillColor(C.accent).text(hasGst ? 'TAX INVOICE' : 'BILL', x + halfW + 10, y, { width: halfW, align: 'right' });
+  doc.font('Helvetica').fontSize(9).fillColor(C.medium);
+  var billNo = bill.billNumber || bill.invoiceNumber || '';
+  doc.text((hasGst ? 'Invoice' : 'Bill') + ' No: ' + billNo, x + halfW + 10, y + 22, { width: halfW, align: 'right' });
+  doc.text('Date: ' + formatDate(bill.createdAt), x + halfW + 10, y + 34, { width: halfW, align: 'right' });
+  doc.text('Time: ' + formatTime(bill.createdAt), x + halfW + 10, y + 46, { width: halfW, align: 'right' });
+
+  y = Math.max(by, y + 60) + 5;
+  drawLine(doc, x, y, x + w, y, C.accent, 1);
+  y += 10;
+
+  if (bill.customerName || bill.customerPhone) {
+    doc.font('Helvetica').fontSize(9).fillColor(C.dark);
+    if (bill.customerName) doc.text('Customer: ' + bill.customerName, x, y, { width: w * 0.6 });
+    if (bill.customerPhone) doc.text('Mobile: ' + bill.customerPhone, x + w * 0.6, y, { width: w * 0.4, align: 'right' });
+    y += 14;
+  }
+
+  var items = Array.isArray(bill.items) ? bill.items : [];
+  var showGst = Number(bill.totalTax || 0) > 0;
+  var cols = showGst
+    ? [{ key: '#', w: 0.06, align: 'center' }, { key: 'Item', w: 0.30 }, { key: 'Qty', w: 0.08, align: 'center' }, { key: 'Rate', w: 0.12, align: 'right' }, { key: 'Disc', w: 0.10, align: 'right' }, { key: 'Taxable', w: 0.12, align: 'right' }, { key: 'GST', w: 0.08, align: 'center' }, { key: 'Amount', w: 0.14, align: 'right' }]
+    : [{ key: '#', w: 0.06, align: 'center' }, { key: 'Item', w: 0.40 }, { key: 'Qty', w: 0.10, align: 'center' }, { key: 'Rate', w: 0.14, align: 'right' }, { key: 'Disc', w: 0.12, align: 'right' }, { key: 'Amount', w: 0.18, align: 'right' }];
+
+  var th = 16;
+  doc.save().fillColor(C.headerBg).rect(x, y, w, th).fill().restore();
+  doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark);
+  var cx = x;
+  for (var ci = 0; ci < cols.length; ci++) { doc.text(cols[ci].key, cx + 2, y + 4, { width: w * cols[ci].w - 4 }); cx += w * cols[ci].w; }
+  y += th;
+  drawLine(doc, x, y, x + w, y, C.line);
+  doc.font('Helvetica').fontSize(8).fillColor(C.dark);
+
+  for (var ii = 0; ii < items.length; ii++) {
+    var it = items[ii];
+    var nameLines = wrapText(it.name || '', 'Helvetica', 8, w * (showGst ? 0.30 : 0.40) - 6);
+    var rowH = Math.max(14, nameLines.length * 9 + 4);
+    if (y + rowH > p.height - p.margins.bottom - 40) {
+      doc.addPage({ size: [p.width, p.height], margin: 0 }); y = p.margins.top;
+      doc.save().fillColor(C.headerBg).rect(x, y, w, th).fill().restore();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark);
+      cx = x;
+      for (var cj = 0; cj < cols.length; cj++) { doc.text(cols[cj].key, cx + 2, y + 4, { width: w * cols[cj].w - 4 }); cx += w * cols[cj].w; }
+      y += th; drawLine(doc, x, y, x + w, y, C.line);
+      doc.font('Helvetica').fontSize(8).fillColor(C.dark);
     }
-  }
-  devanagariFontCss = '';
-  return devanagariFontCss;
-}
-
-// ---------------------------------------------------------------------------
-// Look for a Chromium-family browser (Edge ships on Windows).
-// ---------------------------------------------------------------------------
-const EDGE_CANDIDATES = [
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-];
-
-let cachedBrowserPath = null;
-let browserProbed = false;
-
-function findBrowser() {
-  if (browserProbed) return cachedBrowserPath;
-  browserProbed = true;
-  for (const candidate of EDGE_CANDIDATES) {
-    try {
-      fs.statSync(candidate);
-      cachedBrowserPath = candidate;
-      break;
-    } catch {
-      /* not here */
+    cx = x;
+    var rowY = y + 3;
+    if (showGst) {
+      doc.text(String(ii + 1), cx, rowY, { width: w * 0.06, align: 'center' }); cx += w * 0.06;
+      doc.text(nameLines[0] || '', cx + 2, rowY, { width: w * 0.30 - 4 }); cx += w * 0.30;
+      if (nameLines.length > 1) doc.text(nameLines[1] || '', cx - w * 0.30 + 2, rowY + 9, { width: w * 0.30 - 4 });
+      doc.text(formatQuantity(it.quantity), cx, rowY, { width: w * 0.08, align: 'center' }); cx += w * 0.08;
+      doc.text(formatCurrency(it.unitPrice), cx, rowY, { width: w * 0.12, align: 'right' }); cx += w * 0.12;
+      var itDisc = Number(it.discount || 0);
+      doc.text(itDisc > 0 ? formatCurrency(itDisc) : '-', cx, rowY, { width: w * 0.10, align: 'right' }); cx += w * 0.10;
+      doc.text(formatCurrency(it.lineAmount), cx, rowY, { width: w * 0.12, align: 'right' }); cx += w * 0.12;
+      doc.text((it.taxRate || 0) + '%', cx, rowY, { width: w * 0.08, align: 'center' }); cx += w * 0.08;
+      doc.text(formatCurrency(it.lineAmount), cx, rowY, { width: w * 0.14, align: 'right' });
+    } else {
+      doc.text(String(ii + 1), cx, rowY, { width: w * 0.06, align: 'center' }); cx += w * 0.06;
+      doc.text(nameLines[0] || '', cx + 2, rowY, { width: w * 0.40 - 4 }); cx += w * 0.40;
+      if (nameLines.length > 1) doc.text(nameLines[1] || '', cx - w * 0.40 + 2, rowY + 9, { width: w * 0.40 - 4 });
+      doc.text(formatQuantity(it.quantity), cx, rowY, { width: w * 0.10, align: 'center' }); cx += w * 0.10;
+      doc.text(formatCurrency(it.unitPrice), cx, rowY, { width: w * 0.14, align: 'right' }); cx += w * 0.14;
+      var itDisc2 = Number(it.discount || 0);
+      doc.text(itDisc2 > 0 ? formatCurrency(itDisc2) : '-', cx, rowY, { width: w * 0.12, align: 'right' }); cx += w * 0.12;
+      doc.text(formatCurrency(it.lineAmount), cx, rowY, { width: w * 0.18, align: 'right' });
     }
+    y += rowH;
+    drawLine(doc, x, y, x + w, y, C.line, 0.3);
   }
-  return cachedBrowserPath;
-}
 
-// ---------------------------------------------------------------------------
-// HTML report builder (primary renderer)
-// ---------------------------------------------------------------------------
-/**
- * rows: array of either a 3-cell array ([c1, c2, c3]) or { type: 'separator' }.
- * The table column widths: description flexible, middle narrow/right-aligned.
- */
-function buildReportHtml({ title, businessName, businessMeta = '', periodLabel, metaLabel, headerLines, rows, summaryLines = [], lang = 'en', extraSections = [] }) {
-  const fontFace = getDevanagariFontFace();
-  const header = headerLines || [t(lang, 'description'), t(lang, 'details'), t(lang, 'amount')];
+  y += 5;
+  if (y > p.height - p.margins.bottom - 80) { doc.addPage({ size: [p.width, p.height], margin: 0 }); y = p.margins.top; }
+  var totX = x + w * 0.55;
+  var totW = w * 0.45;
+  var totRight = x + w;
 
-  const renderRows = (list) => (list || []).map((row) => {
-    if (row && typeof row === 'object' && row.type === 'separator') {
-      return '<tr class="sep"><td colspan="3"></td></tr>';
-    }
-    const [a, b, c] = row || [];
-    return `<tr><td>${escHtml(a)}</td><td class="mid">${escHtml(b)}</td><td class="amt">${escHtml(c)}</td></tr>`;
-  }).join('\n');
+  var drawTotalRow = function (label, value, opts) {
+    opts = opts || {};
+    var fs = opts.sz || 9;
+    if (opts.bg) { doc.save().fillColor(opts.bg).rect(totX - 2, y - 1, totW + 4, fs + 4).fill().restore(); }
+    doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fs).fillColor(opts.color || C.dark);
+    doc.text(label, totX, y, { width: totW * 0.55 });
+    doc.text(value, totX + totW * 0.55, y, { width: totW * 0.45, align: 'right' });
+    y += (opts.bold ? fs + 5 : fs + 4);
+  };
 
-  const bodyRows = renderRows(rows);
+  drawTotalRow('Subtotal', formatCurrency(bill.subtotal));
+  var disc2 = Number(bill.discountAmount || bill.discount || 0);
+  if (disc2 > 0) { var dLabel = bill.discountType === 'PERCENT' ? 'Discount (' + Number(bill.discount) + '%)' : 'Discount'; drawTotalRow(dLabel, '- ' + formatCurrency(disc2)); }
+  if (Number(bill.taxableAmount || 0) > 0) drawTotalRow('Taxable Amount', formatCurrency(bill.taxableAmount));
+  var cgst2 = Number(bill.cgst || 0), sgst2 = Number(bill.sgst || 0), igst2 = Number(bill.igst || 0);
+  if (cgst2 > 0) drawTotalRow('CGST', formatCurrency(cgst2));
+  if (sgst2 > 0) drawTotalRow('SGST', formatCurrency(sgst2));
+  if (igst2 > 0) drawTotalRow('IGST', formatCurrency(igst2));
+  if (Number(bill.totalTax || 0) > 0) drawTotalRow('Total Tax', formatCurrency(bill.totalTax));
 
-  const summaryHtml = (summaryLines || [])
-    .map((s) => `<div class="summary-line">${escHtml(s)}</div>`)
-    .join('');
+  y += 2;
+  var grandTotal = bill.totalAmount || bill.grandTotal || 0;
+  drawTotalRow('GRAND TOTAL', formatCurrency(grandTotal), { bold: true, sz: 13, bg: C.grandBg });
+  y += 3;
+  drawLine(doc, totX, y, totRight, y, C.accent, 1);
+  y += 8;
 
-  const sectionsHtml = (extraSections || []).map((sec) => {
-    const secHeader = sec.header || header;
-    const heading = sec.heading ? `<div class="section-title">${escHtml(sec.heading)}</div>` : '';
-    return `${heading}
-  <table>
-    <thead><tr><th>${escHtml(secHeader[0])}</th><th class="mid">${escHtml(secHeader[1] || '')}</th><th class="amt">${escHtml(secHeader[2] || '')}</th></tr></thead>
-    <tbody>
-${renderRows(sec.rows)}
-    </tbody>
-  </table>`;
-  }).join('\n');
+  doc.font('Helvetica').fontSize(8).fillColor(C.medium);
+  doc.text('Amount in Words: ' + amountToWords(grandTotal), x, y, { width: w });
+  y += 14;
+  doc.font('Helvetica').fontSize(9).fillColor(C.dark);
+  doc.text('Payment Mode: ' + (bill.paymentMethod || '-'), x, y, { width: w });
+  y += 14;
 
-  const html = `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><style>
-  ${fontFace}
-  @page { size: A4; margin: 14mm 12mm 16mm 12mm; }
-  * { box-sizing: border-box; }
-  body { font-family: 'Devanagari', 'Segoe UI', 'Noto Sans', Arial, sans-serif; color: #111827; font-size: 10.5px; margin: 0; }
-  .shopname { font-size: 20px; font-weight: 800; color: #064E3B; line-height: 1.3; }
-  .shopmeta { font-size: 10px; color: #6b7280; margin-top: 2px; line-height: 1.5; }
-  .title { font-size: 14px; font-weight: 700; color: #1f2937; margin-top: 10px; }
-  .head-meta { font-size: 10px; color: #6b7280; margin-top: 2px; }
-  .rule { border-bottom: 2px solid #059669; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  thead th { background: #059669; color: #fff; font-weight: 700; padding: 6px 8px; text-align: left; font-size: 10px; }
-  thead th.mid, thead th.amt { text-align: right; }
-  tbody td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; }
-  tbody .amt, tbody .mid { text-align: right; font-variant-numeric: tabular-nums; }
-  tbody .mid { color: #374151; }
-  tbody tr.sep td { padding: 4px 0; border-bottom: none; }
-  tbody tr:last-child td { border-bottom: none; }
-  .section-title { font-size: 12.5px; font-weight: 800; color: #064E3B; margin-top: 16px; }
-  .summary { margin-top: 12px; border-left: 4px solid #059669; background: #f0fdf4; padding: 8px 12px; border-radius: 6px; }
-  .summary-line { font-size: 10.5px; font-weight: 600; margin: 0 0 3px 0; }
-  .foot { margin-top: 18px; text-align: center; font-size: 9.5px; color: #9ca3af; }
-  .foot b { color: #059669; }
-</style></head><body>
-  <div class="shopname">${escHtml(businessName)}</div>
-  ${businessMeta ? `<div class="shopmeta">${escHtml(businessMeta)}</div>` : ''}
-  <div class="title">${escHtml(title)}</div>
-  <div class="head-meta">${escHtml(t(lang, 'period'))}: ${escHtml(periodLabel)} &nbsp;|&nbsp; ${escHtml(t(lang, 'generatedOn'))}: ${escHtml(metaLabel)}</div>
-  <div class="rule"></div>
-  <table>
-    <thead><tr><th>${escHtml(header[0])}</th><th class="mid">${escHtml(header[1] || '')}</th><th class="amt">${escHtml(header[2] || '')}</th></tr></thead>
-    <tbody>
-${bodyRows}
-    </tbody>
-  </table>
-${sectionsHtml}
-  ${summaryHtml ? `<div class="summary">${summaryHtml}</div>` : ''}
-  <div class="foot"><b>Powered by BillMitra</b></div>
-</body></html>`;
+  var statusLabel = 'PAID', statusColor = '#059669';
+  if (bill.isVoided) { statusLabel = 'VOIDED'; statusColor = C.voidText; }
+  else if (bill.paymentStatus === 'UNPAID') { statusLabel = 'UNPAID'; statusColor = '#D97706'; }
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(statusColor).text(statusLabel, x, y, { width: w });
+  y += 18;
 
-  return html;
-}
-// ---------------------------------------------------------------------------
-// Thermal (58mm / 80mm) receipt-style builders — for POS printers & sharing.
-// Page width is driven by CSS `@page size` so headless Chrome sizes correctly.
-// ---------------------------------------------------------------------------
-
-/** Shared CSS for a thermal-width page. */
-function thermalPageCss(widthMm, fontFace) {
-  const w = Number(widthMm) || 58;
-  return `
-  ${fontFace}
-  @page { size: ${w}mm auto; margin: 3mm 2.5mm; }
-  * { box-sizing: border-box; }
-  body { font-family: 'Devanagari', 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-         color: #000; font-size: 11px; margin: 0; width: ${w - 5}mm; }
-  .shopname { text-align: center; font-size: 15px; font-weight: 800; line-height: 1.3; }
-  .shopmeta { text-align: center; font-size: 9.5px; color: #333; line-height: 1.45; margin-top: 1px; }
-  .doctitle { text-align: center; font-size: 12.5px; font-weight: 800; letter-spacing: 1px; margin-top: 6px; }
-  .docmeta { text-align: center; font-size: 10px; color: #222; margin-top: 2px; line-height: 1.55; }
-  .dashed { border-top: 1px dashed #000; margin: 5px 0; }
-  .kv { display: flex; justify-content: space-between; font-size: 11px; padding: 1.5px 0; gap: 6px; }
-  .kv .mid { color: #444; }
-  .itemname { font-weight: 700; font-size: 11px; line-height: 1.35; }
-  .itemsku { font-size: 9px; color: #444; }
-  .itemline { display: flex; justify-content: space-between; font-size: 11px; gap: 6px; }
-  .totbig { display: flex; justify-content: space-between; align-items: center;
-            border-top: 3px double #000; border-bottom: 3px double #000;
-            padding: 5px 0; margin-top: 5px; }
-  .totbig .k { font-size: 13px; font-weight: 800; }
-  .totbig .v { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
-  .words { text-align: center; font-size: 9.5px; color: #333; margin-top: 4px; line-height: 1.45; }
-  .foot { text-align: center; margin-top: 8px; font-size: 11px; font-weight: 700; }
-  .footsmall { text-align: center; font-size: 8.5px; color: #666; margin-top: 2px; }
-  .sec-title { font-weight: 800; font-size: 11.5px; margin: 7px 0 2px 0; }
-  .thead { display: flex; justify-content: space-between; font-size: 10px; font-weight: 800;
-           border-bottom: 1px solid #000; padding: 2px 0; gap: 6px;
-           text-transform: uppercase; letter-spacing: 0.4px; }
-  .trio { display: flex; justify-content: space-between; font-size: 10.5px; padding: 1.5px 0; gap: 6px; }
-  .trio-l { flex: 1; text-align: left; font-weight: 600; }
-  .trio-m { flex: 0 0 32px; text-align: center; }
-  .trio-r { flex: 0 0 62px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .summary-line { font-size: 11px; font-weight: 700; padding: 1.5px 0; }
-  .voidbanner { text-align: center; border: 2px solid #DC2626; color: #DC2626;
-                font-weight: 800; font-size: 12px; padding: 4px; margin-bottom: 5px; }
-`;
-}
-
-/** Renders 3-cell rows ([left, mid, right]) as receipt lines. */
-function thermalRows(list) {
-  return (list || []).map((row) => {
-    if (row && typeof row === 'object' && row.type === 'separator') {
-      return '<div class="dashed"></div>';
-    }
-    const [a, b, c] = row || [];
-    const left = escHtml(a || '') + (b ? ` <span class="mid">(${escHtml(b)})</span>` : '');
-    return `<div class="kv"><span>${left}</span><b>${escHtml(c || '')}</b></div>`;
-  }).join('\n');
-}
-
-/** Renders 3-column product rows (name, qty, amount) with aligned columns. */
-function thermalTrioRows(list) {
-  return (list || []).map((row) => {
-    if (row && typeof row === 'object' && row.type === 'separator') {
-      return '<div class="dashed"></div>';
-    }
-    const [name, qty, amt] = row || [];
-    return `<div class="trio"><span class="trio-l">${escHtml(name || '')}</span><span class="trio-m">${escHtml(qty || '')}</span><span class="trio-r">${escHtml(amt || '')}</span></div>`;
-  }).join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Headless-browser PDF renderer
-// ---------------------------------------------------------------------------
-function cleanupDir(dir) {
-  if (!dir) return;
-  try {
-    // fs.rmSync is available on Node >= 14.14 and removes nested dirs.
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch {
-    /* best-effort */
+  if (y < p.height - p.margins.bottom - 20) {
+    drawLine(doc, x, y, x + w, y, C.line);
+    y += 6;
+    doc.font('Helvetica').fontSize(8).fillColor(C.light).text('Thank you for your business!', x, y, { width: w, align: 'center' });
+    y += 11;
+    doc.text('This is a computer generated invoice.', x, y, { width: w, align: 'center' });
+    y += 11;
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(C.light).text('Powered by BillMitra', x, y, { width: w, align: 'center' });
   }
+
+  doc.end();
+  return new Promise(function (resolve, reject) { doc.on('end', function () { resolve(Buffer.concat(chunks)); }); doc.on('error', reject); });
 }
+function buildReportPdf(data) {
+  var type = data.type || 'daily';
+  var doc = new PDFDocument({ size: [PAGE.A4.width, PAGE.A4.height], margin: 0, bufferPages: true });
+  var chunks = [];
+  doc.on('data', function (c) { chunks.push(c); });
+  var p = PAGE.A4;
+  var x = p.margins.left;
+  var y = p.margins.top;
+  var w = p.width - p.margins.left - p.margins.right;
 
-/** Thermal-width sales report (shop header, rows as receipt lines, summary). */
-function buildThermalReportHtml(opts) {
-  const {
-    title, businessName, businessMeta = '', periodLabel, metaLabel, headerLines,
-    rows, summaryLines = [], lang = 'en', extraSections = [], widthMm = 58,
-  } = opts;
-  const fontFace = getDevanagariFontFace();
-  const theadHtml = (headerLines && headerLines.length >= 2)
-    ? `<div class="thead"><span>${escHtml(headerLines[0])}</span><span>${escHtml(headerLines[1] || '')}</span>${headerLines[2] ? `<span>${escHtml(headerLines[2])}</span>` : ''}</div>\n`
-    : '';
-  const sectionsHtml = (extraSections || []).map((sec) => {
-    const sh = (sec.header && sec.header.length >= 2)
-      ? `<div class="thead"><span>${escHtml(sec.header[0] || '')}</span><span>${escHtml(sec.header[1] || '')}</span>${sec.header[2] ? `<span>${escHtml(sec.header[2] || '')}</span>` : ''}</div>\n`
-      : '';
-    const body = sec.trio ? thermalTrioRows(sec.rows) : thermalRows(sec.rows);
-    return `\n  <div class="sec-title">${escHtml(sec.heading || '')}</div>\n${sh}${body}`;
-  }).join('\n');
-  const summaryHtml = (summaryLines || [])
-    .map((s) => `<div class="summary-line">${escHtml(s)}</div>`)
-    .join('');
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><style>${thermalPageCss(widthMm, fontFace)}</style></head><body>
-  <div class="shopname">${escHtml(businessName)}</div>
-  ${businessMeta ? `<div class="shopmeta">${escHtml(businessMeta)}</div>` : ''}
-  <div class="dashed"></div>
-  <div class="doctitle">${escHtml(title)}</div>
-  <div class="docmeta">${escHtml(t(lang, 'period'))}: ${escHtml(periodLabel)}<br/>${escHtml(t(lang, 'generatedOn'))}: ${escHtml(metaLabel)}</div>
-  <div class="dashed"></div>
-${theadHtml}${thermalRows(rows)}
-${sectionsHtml}
-  ${summaryHtml ? `<div class="dashed"></div>${summaryHtml}` : ''}
-  <div class="dashed"></div>
-  <div class="foot">धन्यवाद! Thank You!</div>
-  <div class="footsmall">Powered by BillMitra</div>
-</body></html>`;
-}
+  var titleMap = { daily: 'DAILY SALES REPORT', weekly: 'WEEKLY SALES REPORT', monthly: 'MONTHLY SALES REPORT', custom: 'SALES REPORT' };
+  var title = titleMap[type] || 'SALES REPORT';
 
-/** Thermal-width TAX INVOICE / receipt (product name + qty + rate + amount). */
-function buildThermalBillHtml({ business, bill, lang = 'en', widthMm = 58 }) {
-  const fontFace = getDevanagariFontFace();
-  const isMr = lang === 'mr';
-  const both = lang === 'both';
-  const B = (en, mr) => (isMr ? mr : both ? `${en} (${mr})` : en);
+  doc.font('Helvetica-Bold').fontSize(16).fillColor(C.dark).text(data.businessName || 'Business', x, y, { width: w });
+  y += 20;
+  doc.font('Helvetica').fontSize(8).fillColor(C.medium);
+  if (data.businessMeta) { doc.text(data.businessMeta, x, y, { width: w }); y += 11; }
+  y += 3;
+  doc.font('Helvetica-Bold').fontSize(14).fillColor(C.accent).text(title, x, y, { width: w });
+  y += 18;
+  doc.font('Helvetica').fontSize(8).fillColor(C.medium);
+  doc.text('Period: ' + (data.periodLabel || '-'), x, y, { width: w }); y += 11;
+  doc.text('Generated: ' + (data.metaLabel || '-'), x, y, { width: w }); y += 6;
+  drawLine(doc, x, y, x + w, y, C.accent, 1);
+  y += 10;
 
-  const bizName = business?.businessName || 'BillMitra';
-  const addr = [
-    business?.addressLine,
-    [business?.city, business?.pincode].filter(Boolean).join(' - '),
-  ].filter(Boolean).join(', ');
-  const phone = business?.phone ? `Ph: ${business.phone}` : '';
-
-  const dt = bill.createdAt ? new Date(bill.createdAt) : new Date();
-  const dateStr = Number.isNaN(dt.getTime())
-    ? ''
-    : dt.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-  const items = Array.isArray(bill.items) ? bill.items : [];
-  const itemsHtml = items.map((it) => {
-    const amt = Number(it.lineAmount ?? Number(it.quantity || 0) * Number(it.unitPrice || 0));
-    const gstPct = Number(it.taxRate || 0);
-    const qtyPart = `${fmtInt(it.quantity)}${it.unit && it.unit !== 'PCS' ? ' ' + escHtml(it.unit) : ''} x ${fmtAmount(it.unitPrice)}`;
-    return `<div class="itemname">${escHtml(it.name)}</div>
-      ${it.sku ? `<div class="itemsku">${escHtml(it.sku)}</div>` : ''}
-      <div class="itemline"><span>${qtyPart}${gstPct ? ` +GST ${gstPct}%` : ''}</span><b>${fmtAmount(amt)}</b></div>`;
-  }).join('\n<div style="border-top:1px dotted #999;margin:4px 0"></div>\n');
-
-  const totalRows = [];
-  if (Number(bill.subtotal || 0) > 0 && Number(bill.cgst || 0) + Number(bill.sgst || 0) + Number(bill.igst || 0) > 0) {
-    totalRows.push(`<div class="kv"><span>${escHtml(B('Subtotal', 'एकूण'))}</span><b>${fmtAmount(bill.subtotal)}</b></div>`);
-  }
-  if (Number(bill.discount || 0) > 0) {
-    const dl = bill.discountType === 'PERCENT' ? `${B('Discount', 'सूट')} (${Number(bill.discount)}%)` : B('Discount', 'सूट');
-    totalRows.push(`<div class="kv"><span>${escHtml(dl)}</span><b>- ${fmtAmount(bill.discount)}</b></div>`);
-  }
-  if (Number(bill.cgst || 0) > 0) totalRows.push(`<div class="kv"><span>${escHtml(bt(lang, 'cgst'))}</span><b>${fmtAmount(bill.cgst)}</b></div>`);
-  if (Number(bill.sgst || 0) > 0) totalRows.push(`<div class="kv"><span>${escHtml(bt(lang, 'sgst'))}</span><b>${fmtAmount(bill.sgst)}</b></div>`);
-  if (Number(bill.igst || 0) > 0) totalRows.push(`<div class="kv"><span>${escHtml(bt(lang, 'igst'))}</span><b>${fmtAmount(bill.igst)}</b></div>`);
-
-  const grandTotal = Number(bill.totalAmount ?? bill.grandTotal ?? (bill.subtotal || 0));
-  let wordsHtml = '';
-  if (isMr) wordsHtml = amountToWordsMr(grandTotal);
-  else if (both) wordsHtml = `${amountToWordsEn(grandTotal)} / ${amountToWordsMr(grandTotal)}`;
-  else wordsHtml = amountToWordsEn(grandTotal);
-
-  const methodKey = String(bill.paymentMethod || 'OTHER').toUpperCase();
-  const methodLabel = bt(lang, { CASH: 'cash', UPI: 'upi', CARD: 'card', OTHER: 'other' }[methodKey] || 'other');
-
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><style>${thermalPageCss(widthMm, fontFace)}</style></head><body>
-  ${bill.isVoided ? '<div class="voidbanner">** VOIDED (रद्द) **</div>' : ''}
-  <div class="shopname">${escHtml(bizName)}</div>
-  ${addr || phone ? `<div class="shopmeta">${escHtml([addr, phone].filter(Boolean).join(' | '))}</div>` : ''}
-  <div class="dashed"></div>
-  <div class="doctitle">${escHtml(B('TAX INVOICE', 'बिल'))}</div>
-  <div class="docmeta">${escHtml(B('Invoice', 'बिल क्र.'))}: ${escHtml(bill.invoiceNumber || bill.billNumber || '-')}<br/>
-    ${escHtml(dateStr)} &nbsp;|&nbsp; ${escHtml(methodLabel)}</div>
-  ${bill.customerName ? `<div class="docmeta">${escHtml(B('Customer', 'ग्राहक'))}: ${escHtml(bill.customerName)}</div>` : ''}
-  <div class="dashed"></div>
-${itemsHtml}
-  <div class="dashed"></div>
-${totalRows.join('\n')}
-  <div class="totbig"><span class="k">${escHtml(B('TOTAL', 'एकूण'))}</span><span class="v">${fmtAmount(grandTotal)}</span></div>
-  ${wordsHtml ? `<div class="words">${escHtml(wordsHtml)}</div>` : ''}
-  <div class="foot">धन्यवाद! Thank You!</div>
-  <div class="footsmall">Powered by BillMitra</div>
-</body></html>`;
-}
-
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function renderHtmlToPdf(html) {
-  const browser = findBrowser();
-  if (!browser) throw new Error('No Chromium/Edge browser available');
-
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'billmitra-pdf-'));
-  const htmlPath = path.join(dir, 'report.html');
-  const outPath = path.join(dir, 'report.pdf');
-  const profileDir = path.join(dir, 'profile');
-  fs.mkdirSync(profileDir, { recursive: true });
-
-  fs.writeFileSync(htmlPath, html, 'utf8');
-
-  const fileUrl = 'file:///' + htmlPath.replace(/\\/g, '/');
-  const args = [
-    '--headless=new',
-    '--disable-gpu',
-    '--no-sandbox',
-    '--no-first-run',
-    '--no-default-browser-check',
-    `--user-data-dir=${profileDir}`,
-    '--no-pdf-header-footer',
-    '--print-background',
-    `--print-to-pdf=${outPath}`,
-    fileUrl,
+  var s = data.summary || {};
+  var cardData = [
+    { label: 'Total Bills', value: String(s.totalBills || 0) },
+    { label: 'Items Sold', value: String(s.totalItems || 0) },
+    { label: 'Gross Sales', value: formatCurrency(s.grossSales) },
+    { label: 'Discount', value: formatCurrency(s.discount) },
+    { label: 'Taxable Sales', value: formatCurrency(s.taxableSales) },
+    { label: 'CGST', value: formatCurrency(s.cgst) },
+    { label: 'SGST', value: formatCurrency(s.sgst) },
+    { label: 'IGST', value: formatCurrency(s.igst) },
+    { label: 'Net Sales', value: formatCurrency(s.netSales), bold: true },
   ];
 
-  try {
-    await childProcess.execFile(browser, args, { timeout: 120000 });
-    // Edge backs the write with a child that may finish AFTER the parent exits.
-    // Poll for the output for up to 30s instead of assuming it appears instantly.
-    let waited = 0;
-    while (!fs.existsSync(outPath) && waited < 30000) {
-      await sleepMs(500);
-      waited += 500;
+  var cardW = (w - 16) / 3;
+  var cardH = 28;
+  for (var i = 0; i < cardData.length; i++) {
+    var col = i % 3;
+    var row = Math.floor(i / 3);
+    var cxx = x + col * (cardW + 8);
+    var cyy = y + row * (cardH + 6);
+    doc.save().fillColor(C.headerBg).rect(cxx, cyy, cardW, cardH).fill().restore();
+    doc.save().strokeColor(C.line).lineWidth(0.5).rect(cxx, cyy, cardW, cardH).stroke().restore();
+    var cd = cardData[i];
+    doc.font(cd.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(7).fillColor(C.medium).text(cd.label, cxx + 5, cyy + 4, { width: cardW - 10 });
+    doc.font('Helvetica-Bold').fontSize(cd.bold ? 12 : 10).fillColor(cd.bold ? C.accent : C.dark).text(cd.value, cxx + 5, cyy + 14, { width: cardW - 10 });
+  }
+  y += Math.ceil(cardData.length / 3) * (cardH + 6) + 8;
+
+  if (data.payments && (data.payments.cash || data.payments.upi || data.payments.card || data.payments.credit)) {
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.dark).text('Payment Summary', x, y, { width: w });
+    y += 15;
+    var payCols = [{ label: 'Cash', value: data.payments.cash || 0 }, { label: 'UPI', value: data.payments.upi || 0 }, { label: 'Card', value: data.payments.card || 0 }, { label: 'Credit', value: data.payments.credit || 0 }].filter(function (p) { return p.value > 0; });
+    if (payCols.length) {
+      var pw = w / payCols.length;
+      doc.save().fillColor(C.headerBg).rect(x, y, w, 14).fill().restore();
+      doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark);
+      for (var pi = 0; pi < payCols.length; pi++) doc.text(payCols[pi].label, x + pi * pw + 3, y + 3, { width: pw - 6, align: 'center' });
+      y += 14;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.accent);
+      for (var pj = 0; pj < payCols.length; pj++) doc.text(formatCurrency(payCols[pj].value), x + pj * pw + 3, y + 2, { width: pw - 6, align: 'center' });
+      y += 16;
     }
-    if (!fs.existsSync(outPath)) {
-      throw new Error('Browser produced no PDF file (html=' + htmlPath + ' out=' + outPath + ' url=' + fileUrl + ')');
+    y += 5;
+  }
+
+  var th = 14;
+  if (data.dailyBreakdown && data.dailyBreakdown.length) {
+    if (y > p.height - p.margins.bottom - 60) { doc.addPage({ size: [p.width, p.height], margin: 0 }); y = p.margins.top; }
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.dark).text('Daily Breakdown', x, y, { width: w });
+    y += 15;
+    var tCols = [{ key: 'Date', w: 0.18 }, { key: 'Bills', w: 0.10, align: 'center' }, { key: 'Items', w: 0.10, align: 'center' }, { key: 'Gross', w: 0.16, align: 'right' }, { key: 'Discount', w: 0.14, align: 'right' }, { key: 'Tax', w: 0.14, align: 'right' }, { key: 'Net Sales', w: 0.18, align: 'right' }];
+    doc.save().fillColor(C.headerBg).rect(x, y, w, th).fill().restore();
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark);
+    var tcx = x;
+    for (var tc = 0; tc < tCols.length; tc++) { doc.text(tCols[tc].key, tcx + 2, y + 3, { width: w * tCols[tc].w - 4 }); tcx += w * tCols[tc].w; }
+    y += th; drawLine(doc, x, y, x + w, y, C.line);
+    for (var di = 0; di < data.dailyBreakdown.length; di++) {
+      var row = data.dailyBreakdown[di];
+      if (y > p.height - p.margins.bottom - 20) { doc.addPage({ size: [p.width, p.height], margin: 0 }); y = p.margins.top; doc.save().fillColor(C.headerBg).rect(x, y, w, th).fill().restore(); doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark); tcx = x; for (var tc2 = 0; tc2 < tCols.length; tc2++) { doc.text(tCols[tc2].key, tcx + 2, y + 3, { width: w * tCols[tc2].w - 4 }); tcx += w * tCols[tc2].w; } y += th; drawLine(doc, x, y, x + w, y, C.line); }
+      if (di % 2 === 1) { doc.save().fillColor('#FAFAFA').rect(x, y, w, 12).fill().restore(); }
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.dark);
+      tcx = x;
+      doc.text(row.label || '', tcx, y + 2, { width: w * 0.18 - 2 }); tcx += w * 0.18;
+      doc.text(String(row.bills || 0), tcx, y + 2, { width: w * 0.10, align: 'center' }); tcx += w * 0.10;
+      doc.text(String(row.items || 0), tcx, y + 2, { width: w * 0.10, align: 'center' }); tcx += w * 0.10;
+      doc.text(formatCurrency(row.gross || 0), tcx, y + 2, { width: w * 0.16, align: 'right' }); tcx += w * 0.16;
+      doc.text(formatCurrency(row.discount || 0), tcx, y + 2, { width: w * 0.14, align: 'right' }); tcx += w * 0.14;
+      doc.text(formatCurrency(row.tax || 0), tcx, y + 2, { width: w * 0.14, align: 'right' }); tcx += w * 0.14;
+      doc.text(formatCurrency(row.net || 0), tcx, y + 2, { width: w * 0.18, align: 'right' });
+      y += 12;
     }
-    const buf = Buffer.from(fs.readFileSync(outPath));
-    cleanupDir(dir);
-    return buf;
-  } catch (e) {
-    console.error('[pdfReportService] renderHtmlToPdf error:', e && e.message ? e.message : e);
-    cleanupDir(dir);
-    throw e;
+    y += 8;
   }
-}
 
-// ---------------------------------------------------------------------------
-// Minimal ASCII fallback PDF (kept for servers without a browser).
-// Renders a correct multi-column layout using Helvetica.
-// ---------------------------------------------------------------------------
-function escapeText(value) {
-  return String(value ?? '')
-    .replace(/\u20B9/g, 'Rs. ')
-    .replace(/[^\x20-\x7E]/g, '')
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)');
-}
-
-function buildAsciiPdfFallback({ businessName, title, periodLabel, rows }) {
-  const W = 612;
-  const H = 792;
-  const leftX = 48;
-  const col2X = 320;
-  const rightX = W - 48;
-  const topY = 760;
-  const lineH = 15;
-
-  const content = [];
-  // Shop name is the big header (NOT the app name) — the report belongs to the shop.
-  content.push(`BT /F2 16 Tf ${leftX} ${topY} Td (${escapeText(businessName || 'Report')}) Tj ET`);
-  content.push(`BT /F2 12 Tf ${leftX} ${topY - 22} Td (${escapeText(title || '')}) Tj ET`);
-  content.push(`BT /F1 10 Tf ${leftX} ${topY - 40} Td (Period: ${escapeText(periodLabel)}) Tj ET`);
-  content.push('q 48 ' + (topY - 50) + ' 516 0.6 re f Q');
-
-  let y = topY - 66;
-  for (const row of rows || []) {
-    if (row && typeof row === 'object' && row.type === 'separator') {
-      y -= 8;
-      continue;
+  if (data.products && data.products.length) {
+    if (y > p.height - p.margins.bottom - 60) { doc.addPage({ size: [p.width, p.height], margin: 0 }); y = p.margins.top; }
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(C.dark).text('Product Performance', x, y, { width: w });
+    y += 15;
+    var pCols = [{ key: '#', w: 0.06, align: 'center' }, { key: 'Product', w: 0.54 }, { key: 'Qty Sold', w: 0.16, align: 'right' }, { key: 'Revenue', w: 0.24, align: 'right' }];
+    doc.save().fillColor(C.headerBg).rect(x, y, w, th).fill().restore();
+    doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark);
+    var pcx = x;
+    for (var pc = 0; pc < pCols.length; pc++) { doc.text(pCols[pc].key, pcx + 2, y + 3, { width: w * pCols[pc].w - 4 }); pcx += w * pCols[pc].w; }
+    y += th; drawLine(doc, x, y, x + w, y, C.line);
+    for (var pp = 0; pp < data.products.length; pp++) {
+      var prod = data.products[pp];
+      if (y > p.height - p.margins.bottom - 20) { doc.addPage({ size: [p.width, p.height], margin: 0 }); y = p.margins.top; doc.save().fillColor(C.headerBg).rect(x, y, w, th).fill().restore(); doc.font('Helvetica-Bold').fontSize(7.5).fillColor(C.dark); pcx = x; for (var pc2 = 0; pc2 < pCols.length; pc2++) { doc.text(pCols[pc2].key, pcx + 2, y + 3, { width: w * pCols[pc2].w - 4 }); pcx += w * pCols[pc2].w; } y += th; drawLine(doc, x, y, x + w, y, C.line); }
+      if (pp % 2 === 1) { doc.save().fillColor('#FAFAFA').rect(x, y, w, 12).fill().restore(); }
+      doc.font('Helvetica').fontSize(7.5).fillColor(C.dark);
+      pcx = x;
+      doc.text(String(pp + 1), pcx, y + 2, { width: w * 0.06, align: 'center' }); pcx += w * 0.06;
+      doc.text(prod.name || '', pcx + 2, y + 2, { width: w * 0.54 - 4 }); pcx += w * 0.54;
+      doc.text(formatQuantity(prod.quantity), pcx, y + 2, { width: w * 0.16, align: 'right' }); pcx += w * 0.16;
+      doc.text(formatCurrency(prod.revenue), pcx, y + 2, { width: w * 0.24, align: 'right' });
+      y += 12;
     }
-    const [a, b, c] = row || [];
-    if (y < 60) break;
-    content.push(`BT /F1 10 Tf ${leftX} ${y} Td (${escapeText(a)}) Tj ET`);
-    if (b) content.push(`BT /F1 10 Tf ${col2X} ${y} Td (${escapeText(b)}) Tj ET`);
-    if (c) content.push(`BT /F1 10 Tf ${rightX} ${y} Td (${escapeText(c)}) Tj ET`);
-    y -= lineH;
+    y += 8;
   }
 
-  const stream = content.join('\n');
-  const objects = [];
-  objects.push('<< /Type /Catalog /Pages 2 0 R >>');
-  objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  objects.push(
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] ' +
-      '/Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>'
-  );
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
-  objects.push('<< /Length ' + Buffer.byteLength(stream, 'latin1') + ' >>\nstream\n' + stream + '\nendstream');
+  drawLine(doc, x, y, x + w, y, C.line);
+  y += 5;
+  doc.font('Helvetica').fontSize(7).fillColor(C.light).text('Powered by BillMitra', x, y, { width: w, align: 'center' });
 
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  objects.forEach((obj, i) => {
-    offsets.push(Buffer.byteLength(pdf, 'latin1'));
-    pdf += (i + 1) + ' 0 obj\n' + obj + '\nendobj\n';
-  });
+  doc.end();
+  return new Promise(function (resolve, reject) { doc.on('end', function () { resolve(Buffer.concat(chunks)); }); doc.on('error', reject); });
+}
+function buildThermalReportPdf(data) {
+  var doc = new PDFDocument({ size: [PAGE.RECEIPT.width, PAGE.RECEIPT.height], margin: 0, bufferPages: true });
+  var chunks = [];
+  doc.on('data', function (c) { chunks.push(c); });
+  var p = PAGE.RECEIPT;
+  var x = p.margins.left;
+  var y = p.margins.top;
+  var w = p.width - p.margins.left - p.margins.right;
+  var fs = 7;
 
-  const xrefStart = Buffer.byteLength(pdf, 'latin1');
-  pdf += 'xref\n0 ' + (objects.length + 1) + '\n';
-  pdf += '0000000000 65535 f \n';
-  for (let i = 1; i <= objects.length; i += 1) {
-    pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.black).text(data.businessName || 'Business', x, y, { width: w, align: 'center' });
+  y += 11;
+  doc.font('Helvetica-Bold').fontSize(8).fillColor(C.black).text(data.title || 'REPORT', x, y, { width: w, align: 'center' });
+  y += 11;
+  doc.font('Helvetica').fontSize(fs).fillColor(C.medium).text(data.periodLabel || '', x, y, { width: w, align: 'center' });
+  y += 10;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
+
+  var s = data.summary || {};
+  var row = function (label, val, bold) { doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 8 : fs).fillColor(C.dark); doc.text(label, x, y, { width: w * 0.6 }); doc.text(val, x + w * 0.6, y, { width: w * 0.4, align: 'right' }); y += bold ? 11 : 9; };
+  row('Total Bills', String(s.totalBills || 0));
+  row('Items Sold', String(s.totalItems || 0));
+  row('Gross Sales', formatCurrency(s.grossSales));
+  row('Discount', formatCurrency(s.discount));
+  row('Net Sales', formatCurrency(s.netSales), true);
+  y += 2;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
+
+  if (data.payments) {
+    var payRows = [['Cash', data.payments.cash], ['UPI', data.payments.upi], ['Card', data.payments.card], ['Credit', data.payments.credit]].filter(function (p) { return p[1] > 0; });
+    for (var pi = 0; pi < payRows.length; pi++) { row(payRows[pi][0], formatCurrency(payRows[pi][1])); }
   }
-  pdf += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\n';
-  pdf += 'startxref\n' + xrefStart + '\n%%EOF';
 
-  return Buffer.from(pdf, 'latin1');
+  if (data.dailyBreakdown && data.dailyBreakdown.length) {
+    y += 2;
+    drawDashedLine(doc, x, y, x + w, y, C.light);
+    y += 5;
+    doc.font('Helvetica-Bold').fontSize(fs).fillColor(C.dark).text('Daily', x, y, { width: w });
+    y += 10;
+    for (var di = 0; di < data.dailyBreakdown.length; di++) {
+      var d = data.dailyBreakdown[di];
+      doc.font('Helvetica').fontSize(fs).fillColor(C.dark);
+      doc.text(d.label || '', x, y, { width: w * 0.5 });
+      doc.text(formatCurrency(d.net || 0), x + w * 0.5, y, { width: w * 0.5, align: 'right' });
+      y += 9;
+    }
+  }
+
+  y += 3;
+  drawDashedLine(doc, x, y, x + w, y, C.light);
+  y += 5;
+  doc.font('Helvetica').fontSize(6).fillColor(C.light).text('Powered by BillMitra', x, y, { width: w, align: 'center' });
+
+  doc.end();
+  return new Promise(function (resolve, reject) { doc.on('end', function () { resolve(Buffer.concat(chunks)); }); doc.on('error', reject); });
 }
 
-// ---------------------------------------------------------------------------
-// Bill / invoice PDF builder (product name + qty + clear amounts), bilingual.
-// ---------------------------------------------------------------------------
-const BILL_PDF_CSS = `
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', 'Devanagari', Arial, sans-serif; color: #1F2937; font-size: 12px; -webkit-print-color-adjust: exact; }
-@page { size: A4; margin: 10mm; }
-.sheet { max-width: 190mm; margin: 0 auto; }
-.topbar { background: linear-gradient(90deg, #064E3B, #059669); color: #FFFFFF; border-radius:  10px; padding: 14px 18px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.bizname { font-size: 20px; font-weight: 800; letter-spacing: .3px; }
-.bizmeta { font-size: 11px; opacity: .95; margin-top: 3px; line-height: 1.5; }
-.doctitle { text-align: right; font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; }
-.docsub { text-align: right; font-size: 11px; opacity: .95; margin-top: 3px; }
-.meta { display: flex; gap: 8px; margin: 12px 0; }
-.metabox { flex:  1; background: #F9FAFB; border:  1px solid #E5E7EB; border-radius: 8px; padding: 7px 10px; }
-.metabox .k { font-size:  10px; color: #6B7280; text-transform: uppercase; letter-spacing: .4px; }
-.metabox .v { font-size:  13px; font-weight: 700; margin-top: 2px; }
-.cust { background: #F0FDF4; border:  1px solid #BBF7D0; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 12.5px; }
-table { width: 100%; border-collapse: collapse; }
-thead th { background: #064E3B; color: #FFFFFF; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; padding: 7px 8px; text-align: left; }
-thead th.r, td.r { text-align: right; }
-thead th.c, td.c { text-align: center; }
-tbody td { padding: 7px 8px; border-bottom: 1px solid #F3F4F6; vertical-align: top; }
-tbody tr:nth-child(even) { background: #F9FAFB; }
-.pname { font-weight: 700; font-size: 12.5px; }
-.psub { font-size: 10px; color: #9CA3AF; margin-top: 1px; }
-.amt { font-weight: 700; }
-.totals { margin-top: 12px; display: flex; justify-content: flex-end; }
-.totbox { width: 64mm; }
-.totrow { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
-.totrow .r { font-weight: 600; }
-.grand { display: flex; justify-content: space-between; align-items: center; background: #059669; color: #FFFFFF; border-radius: 8px; padding: 10px 14px; margin-top: 6px; }
-.grand .k { font-size: 13px; font-weight: 800; letter-spacing: .5px; }
-.grand .v { font-size: 19px; font-weight: 800; }
-.words { margin-top: 12px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 8px 12px; font-size: 12px; line-height: 1.6; }
-.words .k { font-size: 10px; color: #92400E; text-transform: uppercase; letter-spacing: .4px; font-weight: 700; }
-.foot { margin-top: 14px; text-align: center; color: #6B7280; font-size: 11px; line-height: 1.6; }
-.voidbanner { margin-bottom: 10px; background: #FEF2F2; border: 2px solid #DC2626; color: #DC2626; text-align: center; font-weight: 800; font-size: 14px; padding: 8px; border-radius: 8px; }
-.st-paid { color: #059669; } .st-unpaid { color: #D97706; } .st-void { color: #DC2626; }
-`;
-/** HTML for a professional A4 TAX INVOICE (product name, qty, rate, GST,
- * amount columns + clear totals + amount-in-words English & Marathi). */
-function buildBillHtml({ business, bill, lang = 'en' }) {
-  const fontFace = getDevanagariFontFace();
-  const isMr = lang === 'mr';
-  const both = lang === 'both';
-  const B = (en, mr) => (isMr ? mr : both ? `${en} (${mr})` : en);
-
-  const bizName = business?.businessName || 'BillMitra';
- const addr = [
-    business?.addressLine,
-    [business?.city, business?.pincode].filter(Boolean).join(' - '),
-  ].filter(Boolean).join(', ');
-  const phone = business?.phone ? `Ph: ${business.phone}` : '';
- const gst = business?.gstNumber ? `GSTIN: ${business.gstNumber}` : '';
-
-  const dt = bill.createdAt ? new Date(bill.createdAt) : new Date();
- let dateStr = '';
- if (!Number.isNaN(dt.getTime())) {
-    dateStr = dt.toLocaleString('en-IN', {
-      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  }
-
-  const methodKey = String(bill.paymentMethod || 'OTHER').toUpperCase();
- const methodLabel = bt(lang, { CASH: 'cash', UPI: 'upi', CARD: 'card', OTHER: 'other' }[methodKey] || 'other');
-
-  let statusLabel;
-  let statusClass = '';
- if (bill.isVoided) {
-    statusLabel = B('VOIDED', 'रद्द');
-    statusClass = 'st-void';
-  } else if (Number(bill.dueAmount || 0) > 0) {
-    statusLabel = B('UNPAID', 'बाकी');
-    statusClass = 'st-unpaid';
-  } else {
-    statusLabel = B('PAID', 'पैसे दिले');
-    statusClass = 'st-paid';
-  }
-
-  const items = Array.isArray(bill.items) ? bill.items : [];
- const itemRows = items
-    .map((it, i) => {
-      const amt = Number(it.lineAmount ?? Number(it.quantity || 0) * Number(it.unitPrice || 0));
-      const gstPct = Number(it.taxRate || 0);
-      return `<tr>
-        <td class="c">${i + 1}</td>
-        <td><div class="pname">${escHtml(it.name)}</div>${it.sku ? `<div class="psub">${escHtml(it.sku)}${it.unit && it.unit !== 'PCS' ? ' · ' + escHtml(it.unit) : ''}</div>` : ''}</td>
-        <td class="c">${fmtInt(it.quantity)}</td>
-        <td class="r">${fmtAmount(it.unitPrice)}</td>
-        <td class="c">${gstPct ? gstPct + '%' : '—'}</td>
-        <td class="r amt">${fmtAmount(amt)}</td>
-      </tr>`;
-    })
-    .join('\n');
-
-  const taxRows = [];
- if (Number(bill.cgst || 0) > 0) taxRows.push(`<div class="totrow"><span>${escHtml(bt(lang, 'cgst'))}</span><span class="r">${fmtAmount(bill.cgst)}</span></div>`);
- if (Number(bill.sgst || 0) > 0) taxRows.push(`<div class="totrow"><span>${escHtml(bt(lang, 'sgst'))}</span><span class="r">${fmtAmount(bill.sgst)}</span></div>`);
- if (Number(bill.igst || 0) > 0) taxRows.push(`<div class="totrow"><span>${escHtml(bt(lang, 'igst'))}</span><span class="r">${fmtAmount(bill.igst)}</span></div>`);
-
- const hasDiscount = Number(bill.discount || 0) > 0;
- const discountLabel = hasDiscount
-    ? (bill.discountType === 'PERCENT' ? `${bt(lang, 'discount')} (${Number(bill.discount)}%)` : bt(lang, 'discount'))
-    : bt(lang, 'discount');
-
-  const grandTotal = Number(bill.totalAmount ?? bill.grandTotal ?? (bill.subtotal || 0));
- let wordsHtml;
-  if (isMr) wordsHtml = escHtml(amountToWordsMr(grandTotal));
- else if (both) wordsHtml = escHtml(amountToWordsEn(grandTotal)) + '<br/>' + escHtml(amountToWordsMr(grandTotal));
-  else wordsHtml = escHtml(amountToWordsEn(grandTotal));
-
-  const voidBanner = bill.isVoided
-    ? `<div class="voidbanner">${escHtml(B('VOIDED', 'रद्द'))} — ${escHtml(B('This bill has been cancelled.', 'हे बिल रद्द करण्यात आले आहे.'))}</div>`
-    : '';
-
-  const billNo = escHtml(bill.billNumber || bill.invoiceNumber || '—');
-
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><style>
-${fontFace}
-${BILL_PDF_CSS}
-</style></head><body><div class="sheet">
-  ${voidBanner}
-  <div class="topbar">
-    <div>
-      <div class="bizname">${escHtml(bizName)}</div>
-      ${addr ? `<div class="bizmeta">${escHtml(addr)}</div>` : ''}
-      ${phone ? `<div class="bizmeta">${escHtml(phone)}</div>` : ''}
-      ${gst ? `<div class="bizmeta">${escHtml(gst)}</div>` : ''}
-    </div>
-    <div>
-      <div class="doctitle">${escHtml(B('TAX INVOICE', 'टॅक्स इनव्हॉइस'))}</div>
-      <div class="docsub">${escHtml(bt(lang, 'billNo'))}: ${billNo}</div>
-    </div>
-  </div>
-  <div class="meta">
-    <div class="metabox"><div class="k">${escHtml(bt(lang, 'billNo'))}</div><div class="v">${billNo}</div></div>
-    <div class="metabox"><div class="k">${escHtml(bt(lang, 'date'))}</div><div class="v">${escHtml(dateStr)}</div></div>
-    <div class="metabox"><div class="k">${escHtml(bt(lang, 'payment'))}</div><div class="v">${escHtml(methodLabel)}</div></div>
-    <div class="metabox"><div class="k">${escHtml(bt(lang, 'status'))}</div><div class="v ${statusClass}">${escHtml(statusLabel)}</div></div>
-  </div>
-  <div class="cust"><b>${escHtml(bt(lang, 'customer'))}:</b> ${escHtml(bill.customerName || B('Walk-in Customer', 'सामान्य ग्राहक'))}${bill.customerPhone ? ' &nbsp;·&nbsp; ' + escHtml(bill.customerPhone) : ''}</div>
-  <table>
-    <thead><tr>
-      <th class="c" style="width:6%">${escHtml(B('#', 'क्र.'))}</th>
-      <th>${escHtml(B('Item', 'वस्तू'))}</th>
-      <th class="c" style="width:9%">${escHtml(B('Qty', 'प्रमाण'))}</th>
-      <th class="r" style="width:14%">${escHtml(B('Rate', 'दर'))}</th>
-      <th class="c" style="width:9%">${escHtml(B('GST', 'जीएसटी'))}</th>
-      <th class="r" style="width:16%">${escHtml(B('Amount', 'रक्कम'))}</th>
-    </tr></thead>
-    <tbody>${itemRows}</tbody>
-  </table>
-  <div class="totals"><div class="totbox">
-    <div class="totrow"><span>${escHtml(bt(lang, 'subtotal'))}</span><span class="r">${fmtAmount(bill.subtotal)}</span></div>
-    ${hasDiscount ? `<div class="totrow"><span>${escHtml(discountLabel)}</span><span class="r">- ${fmtAmount(bill.discount)}</span></div>` : ''}
-    <div class="totrow"><span>${escHtml(bt(lang, 'taxable'))}</span><span class="r">${fmtAmount(bill.taxableAmount)}</span></div>
-    ${taxRows.join('\n')}
-    <div class="totrow"><span>${escHtml(bt(lang, 'totalTax'))}</span><span class="r">${fmtAmount(bill.totalTax)}</span></div>
-    <div class="grand"><span class="k">${escHtml(B('TOTAL', 'एकूण'))}</span><span class="v">${fmtAmount(grandTotal)}</span></div>
-  </div></div>
-  <div class="words"><div class="k">${escHtml(B('Amount in Words', 'रक्कम अक्षरी'))}</div>${wordsHtml}</div>
-  <div class="foot">
-    ${escHtml(B('Thank you for your business!', 'व्यवसायाबद्दल धन्यवाद!'))}<br/>
-    ${escHtml(B('This is a computer generated invoice.', 'ही संगणकावर तयार केलेली पावती आहे.'))}<br/>
-    <b>${escHtml(B('Powered by BillMitra', 'बिलमित्र द्वारे समर्थित'))}</b>
-  </div>
-</div></body></html>`;
-}
-
-/** ASCII fallback invoice (servers without a browser). */
-function buildBillAsciiFallback({ business, bill }) {
-  const W = 612;
-  const H = 792;
-  const leftX = 48;
-  const rightX = W - 48;
-  let y = 760;
-  const lineH = 14;
-  const content = [];
-  content.push(`BT /F2 16 Tf ${leftX} ${y} Td (${escapeText(business?.businessName || 'BillMitra')}) Tj ET`);
-  y -= 24;
-  content.push(`BT /F1 11 Tf ${leftX} ${y} Td (TAX INVOICE - ${escapeText(bill.billNumber || bill.invoiceNumber || '')}) Tj ET`);
-  y -= 18;
-  content.push(`BT /F1 9 Tf ${leftX} ${y} Td (${escapeText(new Date(bill.createdAt).toLocaleDateString('en-IN'))}) Tj ET`);
-  y -= 22;
-  content.push('q 48 ' + (y + 4) + ' 516 0.6 re f Q');
-  for (const it of bill.items || []) {
-    if (y < 80) break;
-    const lineTotal = Number(it.lineAmount ?? Number(it.quantity) * Number(it.unitPrice));
-    content.push(`BT /F1 10 Tf ${leftX} ${y} Td (${escapeText(it.name)}) Tj ET`);
-    content.push(`BT /F1 10 Tf ${rightX} ${y} Td (${escapeText('Rs ' + lineTotal.toFixed(2))}) Tj ET`);
-    y -= 14;
-    content.push(`BT /F1 9 Tf ${leftX} ${y} Td (  ${escapeText(String(it.quantity) + ' x Rs ' + Number(it.unitPrice).toFixed(2))}) Tj ET`);
-    y -= 18;
-  }
-  content.push('q 48 ' + (y + 4) + ' 516 0.6 re f Q');
-  content.push(`BT /F2 12 Tf ${leftX} ${y} Td (TOTAL: ${escapeText('Rs ' + Number(bill.totalAmount ?? bill.grandTotal).toFixed(2))}) Tj ET`);
-  const objects = [];
-  objects.push('<< /Type /Catalog /Pages 2 0 R >>');
-  objects.push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-  objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>');
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-  objects.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
-  objects.push('<< /Length ' + Buffer.byteLength(content.join('\n'), 'latin1') + ' >>\nstream\n' + content.join('\n') + '\nendstream');
-  let pdf = '%PDF-1.4\n';
-  const offsets = [0];
-  objects.forEach((obj, i) => {
-    offsets.push(Buffer.byteLength(pdf, 'latin1'));
-    pdf += (i + 1) + ' 0 obj\n' + obj + '\nendobj\n';
-  });
-  const xrefStart = Buffer.byteLength(pdf, 'latin1');
-  pdf += 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n';
-  for (let i = 1; i <= objects.length; i += 1) {
-    pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
-  }
-  pdf += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xrefStart + '\n%%EOF';
-  return Buffer.from(pdf, 'latin1');
-}
-
-/**
- * Build a PDF bill (TAX INVOICE). Preferred renderer: headless Edge with the
- * Devanagari font embedded; falls back to an ASCII invoice.
- * @param {object} opts  { business, bill, lang }
- * @returns {Promise<Buffer>}
- */
-async function buildBillPdf({ business, bill, lang = 'en' }) {
-  try {
-    const html = buildBillHtml({ business, bill, lang });
-    return await renderHtmlToPdf(html);
-  } catch (e) {
-    console.error('[pdfReportService] bill Edge render failed:', e && e.message ? e.message : e);
-    return buildBillAsciiFallback({ business, bill });
-  }
-}
-
-/**
- * Build a PDF report. Preferred: rich bilingual HTML rendered by headless Edge.
- * Falls back to an ASCII PDF when no browser is available.
- *
- * @param {object} opts
- * @param {string} opts.title       - localized title (use t(lang, key))
- * @param {string} opts.businessName
- * @param {string} opts.periodLabel
- * @param {string} [opts.metaLabel] - generated-on timestamp
- * @param {string[]} [opts.headerLines] - [h1, h2, h3] localized
- * @param {Array<Array|null|{type:'separator'}>} opts.rows
- * @param {string[]} [opts.summaryLines] - localized summary lines
- * @param {string} [opts.lang]      - 'en' | 'mr' | 'both'
- * @returns {Promise<Buffer>}
- */
-async function buildReportPdf({ title, businessName, businessMeta = '', periodLabel, metaLabel = '', headerLines, rows, summaryLines = [], lang = 'en', extraSections = [] }) {
-  try {
-    const html = buildReportHtml({
-      title,
-      businessName,
-      businessMeta,
-      periodLabel,
-      metaLabel,
-      headerLines,
-      rows,
-      summaryLines,
-      lang,
-      extraSections,
-    });
-    return await renderHtmlToPdf(html);
-  } catch (e) {
-    console.error('[pdfReportService] Edge render failed:', e && e.message ? e.message : e);
-    // The fallback keeps the full row set (English text only), headed by the shop name.
-    return buildAsciiPdfFallback({ businessName, title, periodLabel, rows });
-  }
-}
-
-/**
- * Build a thermal-width (58mm/80mm) PDF sales report — receipt style.
- * @param {object} opts - same as buildReportPdf plus widthMm (58|80)
- * @returns {Promise<Buffer>}
- */
-async function buildThermalReportPdf(opts) {
-  const { widthMm = 58, ...rest } = opts || {};
-  try {
-    const html = buildThermalReportHtml({ ...rest, widthMm });
-    return await renderHtmlToPdf(html);
-  } catch (e) {
-    console.error('[pdfReportService] thermal report Edge render failed:', e && e.message ? e.message : e);
-    return buildAsciiPdfFallback({ businessName: rest.businessName, title: rest.title, periodLabel: rest.periodLabel, rows: rest.rows });
-  }
-}
-
-/**
- * Build a thermal-width (58mm/80mm) PDF tax invoice — receipt style with
- * product name, quantity, rate and amount per item and a huge TOTAL.
- * @param {object} opts { business, bill, lang, widthMm (58|80) }
- * @returns {Promise<Buffer>}
- */
-async function buildThermalBillPdf({ business, bill, lang = 'en', widthMm = 58 } = {}) {
-  try {
-    const html = buildThermalBillHtml({ business, bill, lang, widthMm });
-    return await renderHtmlToPdf(html);
-  } catch (e) {
-    console.error('[pdfReportService] thermal bill Edge render failed:', e && e.message ? e.message : e);
-    return buildBillAsciiFallback({ business, bill });
-  }
-}
-
-module.exports = { buildReportPdf, buildReportHtml, buildBillPdf, buildBillHtml, buildThermalReportPdf, buildThermalReportHtml, buildThermalBillPdf, buildThermalBillHtml, fmtAmount, fmtInt, t };
+module.exports = { buildReceiptPdf: buildReceiptPdf, buildBillPdf: buildBillPdf, buildReportPdf: buildReportPdf, buildThermalReportPdf: buildThermalReportPdf };

@@ -16,6 +16,7 @@ router.use(authenticateToken, requireTenant, requireBusinessOwner);
 
 router.get('/dashboard', reportController.ownerDashboard);
 router.get('/pdf', validate(reportQuerySchema, 'query'), reportController.pdfReport);
+router.get('/bill-pdf/:billId', reportController.billPdf);
 router.get('/sales', validate(reportQuerySchema, 'query'), reportController.salesReport);
 router.get('/products', validate(reportQuerySchema, 'query'), reportController.productsReport);
 router.get('/payments', validate(reportQuerySchema, 'query'), reportController.paymentsReport);

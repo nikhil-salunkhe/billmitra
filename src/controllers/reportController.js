@@ -5,10 +5,8 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const { ApiError } = require('../utils/ApiError');
 const reportService = require('../services/reportService');
 const pdfReportService = require('../services/pdfReportService');
+const Bill = require('../models/Bill');
 const Business = require('../models/Business');
-
-/** Valid report languages. */
-const PDF_LANGS = ['en', 'mr', 'both'];
 
 /**
  * GET /api/reports/dashboard — owner dashboard overview.
@@ -63,130 +61,134 @@ const paymentsReport = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/reports/pdf?type=sales|products|payments&period=...&lang=en|mr|both
- * Streams a beautiful bilingual (English + Marathi) PDF report for the owner.
- * Bypasses the JSON envelope and returns octet-stream with a Content-Disposition.
+ * GET /api/reports/pdf?type=daily|weekly|monthly|custom&period=...&paper=a4|58|80
+ * Streams a professional English PDF report. Bypasses JSON envelope.
  */
 const pdfReport = asyncHandler(async (req, res) => {
-  const type = req.query.type || 'sales';
-  const lang = PDF_LANGS.includes(req.query.lang) ? req.query.lang : 'en';
+  // Map UI range keys (today/week/month) to report types (daily/weekly/monthly)
+  const typeMap = { today: 'daily', week: 'weekly', month: 'monthly' };
+  const rawType = typeMap[req.query.type] || req.query.type || 'daily';
+  const type = ['daily', 'weekly', 'monthly', 'custom'].includes(rawType) ? rawType : 'daily';
   const range = reportService.getReportRange(req.query);
-  const business = await Business.findById(req.businessId).select('businessName phone address city state pincode');
+  const paper = req.query.paper === '58' || req.query.paper === '80' ? req.query.paper : 'a4';
+
+  const business = await Business.findById(req.businessId).select('businessName phone address city state pincode gstNumber');
   const businessName = business?.businessName || 'Business';
   const businessMeta = [
-    [business?.address, [business?.city, business?.state, business?.pincode].filter(Boolean).join(' - ')].filter(Boolean).join(', '),
+    [business?.address, [business?.city, business?.state, business?.pincode].filter(Boolean).join(', ')].filter(Boolean).join(', '),
     business?.phone ? `Ph: ${business.phone}` : '',
   ].filter(Boolean).join(' | ');
-
-  const isValid = ['sales', 'products', 'payments'].includes(type);
-  if (!isValid) throw ApiError.badRequest('Invalid report type', 'INVALID_REPORT_TYPE');
 
   const fromStr = range.start.toISOString().slice(0, 10);
   const toStr = range.end.toISOString().slice(0, 10);
   const periodLabel = `${fromStr} to ${toStr}`;
-  const metaLabel = new Date().toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const metaLabel = new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-  const { t, fmtAmount, fmtInt } = pdfReportService;
-  let headerLines;
-  let rows = [];
-  let summaryLines = [];
-  let extraSections = [];
+  // Fetch data in parallel
+  const [sales, topProducts] = await Promise.all([
+    reportService.getSalesReport(req.businessId, range, 'day'),
+    reportService.getTopProducts(req.businessId, range, 15),
+  ]);
 
-  // Product-wise breakdown (name + quantity sold) is included on every report —
-  // it is what the shop owner actually needs to review the week.
-  const topProducts = await reportService.getTopProducts(req.businessId, range, 15);
-  const productRows = (topProducts || []).map((p) => [p.name, fmtInt(p.quantity), fmtAmount(p.revenue)]);
-  if (productRows.length > 0) {
-    extraSections.push({
-      heading: t(lang, 'topProducts'),
-      header: [t(lang, 'product'), t(lang, 'qty'), t(lang, 'revenue')],
-      rows: productRows,
-    });
+  const totals = sales.totals || {};
+  const byMethod = sales.byMethod || [];
+
+  // Build payment summary
+  const payments = { cash: 0, upi: 0, card: 0, credit: 0 };
+  for (const m of byMethod) {
+    const key = String(m.method || 'OTHER').toUpperCase();
+    if (key === 'CASH') payments.cash += m.amount || 0;
+    else if (key === 'UPI') payments.upi += m.amount || 0;
+    else if (key === 'CARD' || key === 'CARD_SWIPE' || key === 'CREDIT_CARD' || key === 'DEBIT_CARD') payments.card += m.amount || 0;
+    else if (key === 'CREDIT') payments.credit += m.amount || 0;
+    else payments.cash += m.amount || 0; // fallback
   }
 
-  if (type === 'sales' || type === 'payments') {
-    const sales = await reportService.getSalesReport(req.businessId, range, req.query.groupBy || 'day');
-    const totals = sales.totals || {};
+  // Build summary
+  const summary = {
+    totalBills: totals.bills || 0,
+    totalItems: totals.itemsSold || 0,
+    grossSales: totals.grossSales || 0,
+    discount: totals.discount || 0,
+    taxableSales: (totals.grossSales || 0) - (totals.discount || 0),
+    cgst: totals.cgst || 0,
+    sgst: totals.sgst || 0,
+    igst: totals.igst || 0,
+    netSales: totals.netSales || 0,
+  };
 
-    if (type === 'sales') {
-      rows = [
-        [t(lang, 'grossSales'), '', fmtAmount(totals.grossSales)],
-        [t(lang, 'discounts'), '', fmtAmount(totals.discount)],
-        [t(lang, 'tax'), '', fmtAmount(totals.totalTax)],
-        [t(lang, 'netSales'), '', fmtAmount(totals.netSales)],
-        { type: 'separator' },
-        [t(lang, 'dateDay'), t(lang, 'bills'), t(lang, 'netSales')],
-      ];
-      for (const s of sales.series || []) {
-        rows.push([s.label, fmtInt(s.bills), fmtAmount(s.net)]);
-      }
-      summaryLines = [
-        `${t(lang, 'bills')}: ${fmtInt(totals.bills)}   ${t(lang, 'itemsSold')}: ${fmtInt(totals.itemsSold)}`,
-      ];
-      headerLines = [t(lang, 'description'), t(lang, 'bills'), t(lang, 'amount')];
-    } else {
-      rows = (sales.byMethod || []).map((m) => [
-        String(m.method || 'OTHER'),
-        `${fmtInt(m.count)} ${t(lang, 'bills')}`,
-        fmtAmount(m.amount),
-      ]);
-      if (rows.length === 0) {
-        rows.push([t(lang, 'noPayments'), '', '₹0.00']);
-      }
-      rows.push({ type: 'separator' });
-      rows.push([t(lang, 'dateDay'), t(lang, 'bills'), t(lang, 'netSales')]);
-      for (const s of sales.series || []) {
-        rows.push([s.label, fmtInt(s.bills), fmtAmount(s.net)]);
-      }
-      summaryLines = [
-        `${t(lang, 'totalBills')}: ${fmtInt(totals.bills)}   ${t(lang, 'netSales')}: ${fmtAmount(totals.netSales)}`,
-      ];
-      headerLines = [t(lang, 'description'), t(lang, 'bills'), t(lang, 'amount')];
-    }
-  } else {
-    // products
-    const topProducts = await reportService.getTopProducts(req.businessId, range, req.query.limit);
-    rows = (topProducts || []).map((p) => [p.name, fmtInt(p.quantity), fmtAmount(p.revenue)]);
-    if (rows.length === 0) rows.push([t(lang, 'noProducts'), '', '']);
-    headerLines = [t(lang, 'product'), t(lang, 'qty'), t(lang, 'revenue')];
+  // If tax breakdown not in totals, derive from items
+  if (!summary.cgst && !summary.sgst && !summary.igst && totals.totalTax) {
+    // Assume CGST/SGST split for intra-state
+    summary.cgst = Math.round((totals.totalTax / 2) * 100) / 100;
+    summary.sgst = totals.totalTax - summary.cgst;
   }
 
-  const title =
-    type === 'sales'
-      ? t(lang, 'salesReport')
-      : type === 'payments'
-        ? t(lang, 'paymentReport')
-        : t(lang, 'topProducts');
+  // Build daily breakdown
+  const dailyBreakdown = (sales.series || []).map((s) => ({
+    label: s.label,
+    bills: s.bills || 0,
+    items: s.items || 0,
+    gross: s.gross || s.net || 0,
+    discount: s.discount || 0,
+    tax: s.tax || 0,
+    net: s.net || 0,
+  }));
 
-  const paper = req.query.paper === '58' || req.query.paper === '80' ? req.query.paper : 'a4';
-  const pdfArgs = {
-    title,
+  // Build products list
+  const products = (topProducts || []).map((p) => ({
+    name: p.name,
+    quantity: p.quantity,
+    revenue: p.revenue,
+  }));
+
+  const pdfData = {
+    type,
     businessName,
     businessMeta,
     periodLabel,
     metaLabel,
-    headerLines,
-    rows,
-    summaryLines,
-    lang,
-    extraSections,
+    summary,
+    payments,
+    products,
+    dailyBreakdown,
   };
+
   const buf = paper === 'a4'
-    ? await pdfReportService.buildReportPdf(pdfArgs)
-    : await pdfReportService.buildThermalReportPdf({ ...pdfArgs, widthMm: Number(paper) });
+    ? await pdfReportService.buildReportPdf(pdfData)
+    : await pdfReportService.buildThermalReportPdf({
+        title: type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ') + ' Report',
+        businessName,
+        periodLabel,
+        summary,
+        payments,
+        dailyBreakdown,
+      });
 
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="billmitra-${type}-${lang}${paper === 'a4' ? '' : '-' + paper + 'mm'}-report.pdf"`
-  );
+  res.setHeader('Content-Disposition', `attachment; filename="billmitra-${type}-report${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`);
   return res.send(buf);
 });
 
-module.exports = { ownerDashboard, salesReport, productsReport, paymentsReport, pdfReport };
+/**
+ * GET /api/reports/bill-pdf/:billId?paper=a4|58
+ * Streams a professional English PDF bill/invoice for a specific bill.
+ */
+const billPdf = asyncHandler(async (req, res) => {
+  const paper = req.query.paper === '58' || req.query.paper === '80' ? req.query.paper : 'a4';
+  const bill = await Bill.findOne({ _id: req.params.billId, businessId: req.businessId });
+  if (!bill) throw ApiError.notFound('Bill not found', 'BILL_NOT_FOUND');
+
+  const business = await Business.findById(req.businessId).select('businessName phone address city state pincode gstNumber');
+  const billData = bill.toSafeJSON ? bill.toSafeJSON() : bill;
+
+  const buf = paper === 'a4'
+    ? await pdfReportService.buildBillPdf(billData, business)
+    : await pdfReportService.buildReceiptPdf(billData, business);
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="billmitra-invoice-${billData.billNumber || billData.invoiceNumber || 'bill'}${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`);
+  return res.send(buf);
+});
+
+module.exports = { ownerDashboard, salesReport, productsReport, paymentsReport, pdfReport, billPdf };
