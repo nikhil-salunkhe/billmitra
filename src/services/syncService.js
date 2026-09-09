@@ -48,6 +48,7 @@ async function touchDevice(businessId, deviceId) {
  * products, recomputes totals, validates stock, and inserts atomically
  * (billingService.createBill). Idempotency anchors: transactionId →
  * idempotencyKey; clientBillId → partial-unique index.
+ */
 
 async function pushTransaction(businessId, businessType, userId, tx) {
   const payload = tx.payload || {};
@@ -84,14 +85,15 @@ async function pushTransaction(businessId, businessType, userId, tx) {
 
 /**
  * Pushes a batch of queued records. Each record is processed independently
- * so a single bad record cannot corruptthe rest of the queue. The client must
+ * so a single bad record cannot corrupt the rest of the queue. The client must
  * keep failed entries until a later retry.
+ */
 
 async function pushBatch(businessId, businessType, userId, transactions = []) {
   const synced = [];
   const failed = [];
 
-  for (const tx of (transactions || []).slice(0, PUSH_BATCH_LIMIT))) {
+  for (const tx of (transactions || []).slice(0, PUSH_BATCH_LIMIT)) {
     try {
       const r = await pushTransaction(businessId, businessType, userId, tx);
       synced.push(r);
