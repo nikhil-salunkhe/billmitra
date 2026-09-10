@@ -120,6 +120,20 @@ function amountToWords(amount) {
   return words;
 }
 
+/**
+ * Sanitize a value for safe use inside an HTTP Content-Disposition filename.
+ * Node throws ERR_INVALID_CHAR if a header value contains quotes, non-ASCII,
+ * or control characters — bill numbers are user data, so they must never be
+ * interpolated into a header raw. Keeps only [A-Za-z0-9_-] (RFC 6266 safe),
+ * falls back to 'bill' when nothing remains, caps at 80 chars.
+ */
+function safeFileName(value) {
+  const cleaned = String(value || '')
+    .replace(/[^A-Za-z0-9_-]/g, '')
+    .slice(0, 80);
+  return cleaned || 'bill';
+}
+
 module.exports = {
   formatCurrency,
   formatQuantity,
@@ -128,4 +142,5 @@ module.exports = {
   formatDateTime,
   amountToWords,
   round2,
+  safeFileName,
 };

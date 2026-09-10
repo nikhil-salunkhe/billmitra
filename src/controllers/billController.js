@@ -4,6 +4,7 @@ const { success, created } = require('../utils/ApiResponse');
 const { asyncHandler } = require('../utils/asyncHandler');
 const billingService = require('../services/billingService');
 const pdfReportService = require('../services/pdfReportService');
+const { safeFileName } = require('../utils/pdfFormat');
 const Business = require('../models/Business');
 
 /** Valid bill PDF languages. */
@@ -60,7 +61,7 @@ const getBillPdf = asyncHandler(async (req, res) => {
   const buf = paper === 'a4'
     ? await pdfReportService.buildBillPdf(args)
     : await pdfReportService.buildThermalBillPdf({ ...args, widthMm: Number(paper) });
-  const safeNo = String(bill.invoiceNumber || 'bill').replace(/[^A-Za-z0-9_-]/g, '');
+  const safeNo = safeFileName(bill.invoiceNumber);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader(
     'Content-Disposition',

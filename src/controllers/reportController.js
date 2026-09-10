@@ -5,6 +5,7 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const { ApiError } = require('../utils/ApiError');
 const reportService = require('../services/reportService');
 const pdfReportService = require('../services/pdfReportService');
+const { safeFileName } = require('../utils/pdfFormat');
 const Bill = require('../models/Bill');
 const Business = require('../models/Business');
 
@@ -166,7 +167,7 @@ const pdfReport = asyncHandler(async (req, res) => {
       });
 
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="billmitra-${type}-report${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`);
+  res.setHeader('Content-Disposition', `attachment; filename="billmitra-${safeFileName(type)}-report${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`);
   return res.send(buf);
 });
 
@@ -187,7 +188,7 @@ const billPdf = asyncHandler(async (req, res) => {
     : await pdfReportService.buildReceiptPdf(billData, business);
 
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="billmitra-invoice-${billData.billNumber || billData.invoiceNumber || 'bill'}${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`);
+  res.setHeader('Content-Disposition', `attachment; filename="billmitra-invoice-${safeFileName(billData.billNumber || billData.invoiceNumber)}${paper === 'a4' ? '' : '-' + paper + 'mm'}.pdf"`);
   return res.send(buf);
 });
 
