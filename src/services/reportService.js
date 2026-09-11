@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 const mongoose = require('mongoose');
 
@@ -244,14 +244,19 @@ async function getSalesReport(businessId, { start, end, tz }, groupBy = 'day') {
           { $sort: { amount: -1 } },
         ],
         series: [
+          { $unwind: '$items' },
           {
             $group: {
               _id: { label: { $dateToString: { format: fmt, date: '$createdAt', timezone: tz } } },
               bills: { $sum: 1 },
+              items: { $sum: '$items.quantity' },
+              gross: { $sum: '$subtotal' },
+              discount: { $sum: '$discount' },
+              tax: { $sum: '$totalTax' },
               net: { $sum: '$grandTotal' },
             },
           },
-          { $project: { _id: 0, label: '$_id.label', bills: 1, net: 1 } },
+          { $project: { _id: 0, label: '$_id.label', bills: 1, items: 1, gross: 1, discount: 1, tax: 1, net: 1 } },
           { $sort: { label: 1 } },
         ],
       },
