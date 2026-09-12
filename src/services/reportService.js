@@ -244,19 +244,30 @@ async function getSalesReport(businessId, { start, end, tz }, groupBy = 'day') {
           { $sort: { amount: -1 } },
         ],
         series: [
-          { $unwind: '$items' },
+          // CRITICAL FIX: Group by bill _id FIRST to get unique bills,
+          // then group by date. This prevents bill totals from being
+          // multiplied by the number of line items.
           {
             $group: {
-              _id: { label: { $dateToString: { format: fmt, date: '$createdAt', timezone: tz } } },
+              _id: '$_id',
+              label: { $first: { $dateToString: { format: fmt, date: '$createdAt', timezone: tz } } },
+              subtotal: { $first: '$subtotal' },
+              discount: { $first: '$discount' },
+              totalTax: { $first: '$totalTax' },
+              grandTotal: { $first: '$grandTotal' },
+            },
+          },
+          {
+            $group: {
+              _id: '$label',
               bills: { $sum: 1 },
-              items: { $sum: '$items.quantity' },
               gross: { $sum: '$subtotal' },
               discount: { $sum: '$discount' },
               tax: { $sum: '$totalTax' },
               net: { $sum: '$grandTotal' },
             },
           },
-          { $project: { _id: 0, label: '$_id.label', bills: 1, items: 1, gross: 1, discount: 1, tax: 1, net: 1 } },
+          { $project: { _id: 0, label: '$_id', bills: 1, gross: 1, discount: 1, tax: 1, net: 1 } },
           { $sort: { label: 1 } },
         ],
       },

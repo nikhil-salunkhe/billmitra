@@ -2,8 +2,9 @@
 
 /**
  * Production PDF generator - English only.
- * Three document types: 58mm receipt, A4 bill, A4 report.
+ * Four document types: 58mm receipt, A4 bill, A4 report, thermal report.
  * Uses pdfkit (pure JS, works on Render/Linux).
+ * DejaVuSans / DejaVuSans-Bold TTFs are registered on every document.
  */
 
 var fs = require('fs');
@@ -12,7 +13,10 @@ const PDFDocument = require('pdfkit');
 const { formatCurrency, formatQuantity, formatDate, formatTime, amountToWords } = require('../utils/pdfFormat');
 
 const MM = (mm) => mm * 2.83465;
-const PAGE = { RECEIPT: { width: MM(58), height: MM(297), margins: { top: 3, bottom: 3, left: 3, right: 3 } }, A4: { width: MM(210), height: MM(297), margins: { top: 15, bottom: 15, left: 15, right: 15 } } };
+const PAGE = {
+  RECEIPT: { width: MM(58), margins: { top: 3, bottom: 3, left: 3, right: 3 } },
+  A4: { width: MM(210), height: MM(297), margins: { top: 15, bottom: 15, left: 15, right: 15 } },
+};
 const C = { black: '#000000', dark: '#1F2937', medium: '#4B5563', light: '#9CA3AF', line: '#D1D5DB', accent: '#2563EB', grandBg: '#F3F4F6', voidBg: '#FEF2F2', voidText: '#DC2626', headerBg: '#F8F9FA' };
 
 var _FONT_DIR = path.join(__dirname, '..', 'utils', 'fonts');
@@ -41,15 +45,53 @@ function drawDashedLine(doc, x1, y1, x2, y2, color) { doc.save().strokeColor(col
 var _scratch = null;
 function measureWidth(text, fontSize) { if (!_scratch) _scratch = _newDoc({ size: [1, 1], margin: 0 }); return _scratch.font(_FONT_REGULAR).fontSize(fontSize).widthOfString(String(text || '')); }
 function wrapText(text, fontSize, maxWidth) { var words = String(text || '').split(/\s+/).filter(Boolean); var lines = []; var cur = ''; for (var wi = 0; wi < words.length; wi++) { var w = words[wi]; var test = cur ? cur + ' ' + w : w; if (measureWidth(test, fontSize) <= maxWidth) { cur = test; } else { if (cur) lines.push(cur); cur = w.length > 20 ? w.slice(0, 20) : w; } } if (cur) lines.push(cur); return lines.length ? lines : ['']; }
+
+function _calcReceiptHeight(bill, business) {
+  var fs = 7;
+  var h = 0;
+  h += 11; // shop name
+  if (business && business.address) h += 9;
+  if (business && business.phone) h += 9;
+  if (business && business.gstNumber) h += 9;
+  h += 2 + 4; // dashed line
+  h += 11; // TAX INVOICE
+  h += 2 + 4; // dashed line
+  h += 9; // Bill No
+  h += 9; // Date
+  h += 9; // Time
+  if (bill.customerName) h += 9;
+  if (bill.customerPhone) h += 9;
+  h += 2 + 4; // dashed line
+  var items = Array.isArray(bill.items) ? bill.items : [];
+  for (var i = 0; i < items.length; i++) {
+    var nameLines = wrapText(items[i].name || '', fs, MM(58) - 6);
+    h += 8.5 * nameLines.length;
+    h += 8.5; // qty
+    h += 8.5; // rate
+    h += 9; // amount
+  }
+  if (items.length) h += 10;
+  h += 2 + 4; // dashed line
+  h += 10; // subtotal
+  h += 10; // discount
+  h += 10; // CGST
+  h += 10; // SGST
+  h += 12; // TOTAL
+  if (bill.notes) { h += 2 + 4 + 9; }
+  h += 4 + 8 + 8; // footer
+  h += 6; // bottom margin
+  return Math.max(h, MM(50)); // minimum 50mm
+}
+
 function buildReceiptPdf(bill, business) {
-  var doc = _newDoc({ size: [PAGE.RECEIPT.width, PAGE.RECEIPT.height], margin: 0, bufferPages: true });
+  var fs = 7;
+  var h = _calcReceiptHeight(bill, business);
+  var doc = _newDoc({ size: [PAGE.RECEIPT.width, h], margin: 0, bufferPages: true });
   var chunks = [];
   doc.on('data', function (c) { chunks.push(c); });
-  var p = PAGE.RECEIPT;
-  var x = p.margins.left;
-  var y = p.margins.top;
-  var w = p.width - p.margins.left - p.margins.right;
-  var fs = 7;
+  var x = PAGE.RECEIPT.margins.left;
+  var y = PAGE.RECEIPT.margins.top;
+  var w = PAGE.RECEIPT.width - PAGE.RECEIPT.margins.left - PAGE.RECEIPT.margins.right;
 
   doc.font(_FONT_BOLD).fontSize(9).fillColor(C.black).text(business && business.businessName || 'Business', x, y, { width: w, align: 'center', characterSpacing: 0.5 });
   y += 11;
@@ -80,59 +122,38 @@ function buildReceiptPdf(bill, business) {
   var items = Array.isArray(bill.items) ? bill.items : [];
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
-    var nameLines = wrapText(it.name || '', _FONT_REGULAR, fs, w);
+    var nameLines = wrapText(it.name || '', fs, w);
     for (var nl = 0; nl < nameLines.length; nl++) { doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.dark).text(nameLines[nl], x, y, { width: w }); y += 8.5; }
-    var qty = formatQuantity(it.quantity);
-    var rate = formatCurrency(it.unitPrice);
-    var amt = formatCurrency(it.lineAmount || (Number(it.quantity || 0) * Number(it.unitPrice || 0)));
-    doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.dark);
-    doc.text(qty + ' x ' + rate, x, y, { width: w * 0.55 });
-    doc.text(amt, x + w * 0.55, y, { width: w * 0.45, align: 'right' });
-    y += 9;
+    doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.medium).text(formatQuantity(it.quantity) + ' ' + (it.unit || 'PCS'), x, y, { width: w }); y += 8.5;
+    doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.dark).text(formatCurrency(it.unitPrice), x, y, { width: w }); y += 8.5;
+    doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.dark).text(formatCurrency(it.lineAmount), x, y, { width: w, align: 'right' }); y += 9;
   }
-
   if (items.length) { y += 1; doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.medium).text('Items: ' + items.length, x, y, { width: w }); y += 9; }
 
   y += 2;
   drawDashedLine(doc, x, y, x + w, y, C.light);
   y += 5;
 
-  var totalRow = function (label, value, bold, sz) {
-    var fz = sz || fs;
-    doc.font(bold ? _FONT_BOLD : _FONT_REGULAR).fontSize(fz).fillColor(C.dark);
-    doc.text(label, x, y, { width: w * 0.55 });
-    doc.text(value, x + w * 0.55, y, { width: w * 0.45, align: 'right' });
-    y += (bold ? 11 : 9);
-  };
+  var bold = function (fz, color) { doc.font(_FONT_BOLD).fontSize(fz || 9).fillColor(color || C.dark); };
+  var reg = function (fz, color) { doc.font(_FONT_REGULAR).fontSize(fz || fs).fillColor(color || C.dark); };
+  var totalW = w / 2;
+  bold(10); doc.text('Subtotal:', x, y, { width: totalW }); reg(); doc.text(formatCurrency(bill.subtotal || 0), x + totalW, y, { width: totalW, align: 'right' }); y += 10;
+  bold(10); doc.text('Discount:', x, y, { width: totalW }); reg(); doc.text(formatCurrency(bill.discount || 0), x + totalW, y, { width: totalW, align: 'right' }); y += 10;
+  bold(10); doc.text('CGST:', x, y, { width: totalW }); reg(); doc.text(formatCurrency(bill.cgst || 0), x + totalW, y, { width: totalW, align: 'right' }); y += 10;
+  bold(10); doc.text('SGST:', x, y, { width: totalW }); reg(); doc.text(formatCurrency(bill.sgst || 0), x + totalW, y, { width: totalW, align: 'right' }); y += 10;
+  bold(11, C.accent); doc.text('TOTAL:', x, y, { width: totalW }); doc.font(_FONT_BOLD).fontSize(11).fillColor(C.accent).text(formatCurrency(bill.grandTotal || 0), x + totalW, y, { width: totalW, align: 'right' }); y += 12;
 
-  if (bill.subtotal != null) totalRow('Subtotal', formatCurrency(bill.subtotal));
-  var disc = Number(bill.discountAmount || bill.discount || 0);
-  if (disc > 0) { var discLabel = bill.discountType === 'PERCENT' ? 'Discount ' + Number(bill.discount) + '%' : 'Discount'; totalRow(discLabel, '- ' + formatCurrency(disc)); }
-  if (Number(bill.taxableAmount || 0) > 0) totalRow('Taxable Amount', formatCurrency(bill.taxableAmount));
-  var cgst = Number(bill.cgst || 0), sgst = Number(bill.sgst || 0), igst = Number(bill.igst || 0);
-  if (cgst > 0) totalRow('CGST', formatCurrency(cgst));
-  if (sgst > 0) totalRow('SGST', formatCurrency(sgst));
-  if (igst > 0) totalRow('IGST', formatCurrency(igst));
-  if (Number(bill.totalTax || 0) > 0) totalRow('Total Tax', formatCurrency(bill.totalTax));
+  if (bill.notes) {
+    y += 2;
+    drawDashedLine(doc, x, y, x + w, y, C.light);
+    y += 4;
+    var noteLines = wrapText(bill.notes, fs, w);
+    for (var ni = 0; ni < noteLines.length; ni++) { doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.dark).text(noteLines[ni], x, y, { width: w }); y += 8.5; }
+  }
 
-  y += 2;
-  drawLine(doc, x, y, x + w, y, C.black, 0.8);
   y += 4;
-  var grandTotal = bill.totalAmount || bill.grandTotal || 0;
-  totalRow('GRAND TOTAL', formatCurrency(grandTotal), true, 9);
-  y += 2;
-  drawLine(doc, x, y, x + w, y, C.black, 0.8);
-  y += 5;
-
-  if (bill.paidAmount != null) totalRow('Paid', formatCurrency(bill.paidAmount));
-  if (Number(bill.dueAmount || 0) > 0) totalRow('Due', formatCurrency(bill.dueAmount));
-  totalRow('Payment', bill.paymentMethod || '-');
-
-  y += 3;
-  drawDashedLine(doc, x, y, x + w, y, C.light);
-  y += 5;
   doc.font(_FONT_REGULAR).fontSize(fs).fillColor(C.medium).text('Thank you! Visit Again.', x, y, { width: w, align: 'center' });
-  y += 9;
+  y += 8;
   doc.font(_FONT_REGULAR).fontSize(6).fillColor(C.light).text('Powered by BillMitra', x, y, { width: w, align: 'center' });
 
   doc.end();
@@ -433,14 +454,14 @@ function buildReportPdf(data) {
   return new Promise(function (resolve, reject) { doc.on('end', function () { resolve(Buffer.concat(chunks)); }); doc.on('error', reject); });
 }
 function buildThermalReportPdf(data) {
-  var doc = _newDoc({ size: [PAGE.RECEIPT.width, PAGE.RECEIPT.height], margin: 0, bufferPages: true });
+  var fs = 7;
+  var doc = _newDoc({ size: [PAGE.RECEIPT.width, MM(297)], margin: 0, bufferPages: true });
   var chunks = [];
   doc.on('data', function (c) { chunks.push(c); });
   var p = PAGE.RECEIPT;
   var x = p.margins.left;
   var y = p.margins.top;
   var w = p.width - p.margins.left - p.margins.right;
-  var fs = 7;
 
   doc.font(_FONT_BOLD).fontSize(9).fillColor(C.black).text(data.businessName || 'Business', x, y, { width: w, align: 'center' });
   y += 11;
@@ -498,7 +519,8 @@ function buildThermalBillPdf(args) {
   var business = opts.business || {};
   var widthMm = Number(opts.widthMm) || 58;
   var lang = opts.lang || "both";
-  var doc = _newDoc({ size: [MM(widthMm), PAGE.RECEIPT.height], margin: 0, bufferPages: true });
+  var h = _calcReceiptHeight(opts.bill, opts.business);
+  var doc = _newDoc({ size: [MM(widthMm), h], margin: 0, bufferPages: true });
   var chunks = [];
   doc.on("data", function (c) { chunks.push(c); });
   var p = PAGE.RECEIPT;

@@ -129,12 +129,31 @@ const pdfReport = asyncHandler(async (req, res) => {
   const dailyBreakdown = (sales.series || []).map((s) => ({
     label: s.label,
     bills: s.bills || 0,
-    items: s.items || 0,
     gross: s.gross || s.net || 0,
     discount: s.discount || 0,
     tax: s.tax || 0,
     net: s.net || 0,
   }));
+
+  // RECONCILIATION: Verify summary matches sum of daily breakdown
+  const dailySum = dailyBreakdown.reduce((acc, d) => ({
+    bills: acc.bills + (d.bills || 0),
+    gross: acc.gross + (d.gross || 0),
+    discount: acc.discount + (d.discount || 0),
+    tax: acc.tax + (d.tax || 0),
+    net: acc.net + (d.net || 0),
+  }), { bills: 0, gross: 0, discount: 0, tax: 0, net: 0 });
+
+  // Log reconciliation issues in development
+  if (process.env.NODE_ENV !== 'production') {
+    const tolerance = 0.01;
+    if (Math.abs(summary.totalBills - dailySum.bills) > tolerance) {
+      console.warn(`[REPORT_RECONCILIATION] Bills mismatch: summary=${summary.totalBills}, daily=${dailySum.bills}`);
+    }
+    if (Math.abs(summary.netSales - dailySum.net) > tolerance) {
+      console.warn(`[REPORT_RECONCILIATION] NetSales mismatch: summary=${summary.netSales}, daily=${dailySum.net}`);
+    }
+  }
 
   // Build products list
   const products = (topProducts || []).map((p) => ({
