@@ -11,8 +11,8 @@ const Business = require('../models/Business');
  * (req.user.businessId). The client is never trusted to supply it.
  *
  * Also rejects requests when the business has been SUSPENDED by the admin
- * (a frozen tenant). This is a hard freeze — separate from subscription
- * expiry, which is handled by subscriptionMiddleware in a later phase.
+ * (a frozen tenant). With lifetime service there is no expiry concept —
+ * suspension is the only billing-state block.
  *
  * For SUPER_ADMIN, tenant routes are NOT allowed here (admins use /api/admin).
  * Must run after authenticateToken.

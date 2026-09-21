@@ -3,7 +3,6 @@
 const mongoose = require('mongoose');
 
 const { ApiError } = require('../utils/ApiError');
-const subscriptionService = require('./subscriptionService');
 const Business = require('../models/Business');
 const Bill = require('../models/Bill');
 const { startOfDay, endOfDay, startOfMonth, endOfMonth, addMonthsClamped } = require('../utils/dateUtils');
@@ -31,11 +30,8 @@ function tryModel(name) {
 async function getOwnerDashboard(businessId) {
   if (!businessId) throw ApiError.forbidden('No business tenant', 'NO_BUSINESS_TENANT');
 
-  const business = await Business.findById(businessId).select('businessName businessType status subscriptionStatus');
+  const business = await Business.findById(businessId).select('businessName businessType status');
   if (!business) throw ApiError.notFound('Business not found', 'BUSINESS_NOT_FOUND');
-
-  // Subscription summary (read-only preview).
-  const subscription = await subscriptionService.getOwnerSubscription(businessId);
 
   // Bills & stock collections do not exist until Phases 8/9; compute them when
   // available, otherwise return explicit zeros + availability flags.
@@ -88,9 +84,7 @@ async function getOwnerDashboard(businessId) {
       businessName: business.businessName,
       businessType: business.businessType,
       status: business.status,
-      subscriptionStatus: business.subscriptionStatus,
     },
-    subscription,
     sales,
     lowStock,
     metricsAvailable: available, // honest: which underlying collections exist yet

@@ -4,7 +4,6 @@ const { env } = require('./config/env');
 const { connectDB, disconnectDB, ensureIndexes } = require('./config/db');
 const logger = require('./config/logger');
 const { createApp } = require('./app');
-const { startSweep, stopSweeper } = require('./services/subscriptionScheduler');
 
 const app = createApp();
 
@@ -26,13 +25,8 @@ async function start() {
     logger.info(`BillMitra API listening on port ${env.port} (${env.nodeEnv})`);
   });
 
-  // Start the periodic auto-disable sweep. Its first run is deferred ~1s so the
-  // server and DB settle; individual runs are skipped if the DB isn't ready.
-  startSweep();
-
   const shutdown = async (signal) => {
     logger.info(`${signal} received, shutting down gracefully...`);
-    stopSweeper();
     if (server) server.close();
     try {
       await disconnectDB();

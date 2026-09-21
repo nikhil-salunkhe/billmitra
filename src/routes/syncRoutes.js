@@ -4,7 +4,6 @@ const express = require('express');
 
 const { authenticateToken } = require('../middleware/authMiddleware');
 const { requireTenant } = require('../middleware/tenantMiddleware');
-const { requireBilling } = require('../middleware/subscriptionMiddleware');
 const { requireAnyAuthenticatedRole } = require('../middleware/roleMiddleware');
 const syncController = require('../controllers/syncController');
 
@@ -15,8 +14,8 @@ const router = express.Router();
 // trusted for authorization.
 router.use(authenticateToken, requireTenant, requireAnyAuthenticatedRole);
 
-// Billing gate applies — expired subscriptions must not create server bills.
-router.post('/push', requireBilling, syncController.push);
+// No billing gate: BillMitra is a lifetime service, so sync always works.
+router.post('/push', syncController.push);
 router.get('/pull', syncController.pull);
 
 module.exports = router;

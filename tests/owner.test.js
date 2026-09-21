@@ -84,13 +84,13 @@ after(async () => {
   await mongoose.disconnect();
 });
 
-test('owner dashboard shows only own business + subscription summary', async () => {
+test('owner dashboard shows only own business (lifetime service)', async () => {
   const res = await send('GET', '/api/reports/dashboard', null, tokenA);
   assert.strictEqual(res.status, 200);
   assert.strictEqual(res.json.data.business.businessName, 'Owner Retail');
   assert.strictEqual(res.json.data.business.businessId, bizA._id.toString());
-  assert.ok(res.json.data.subscription);
-  assert.strictEqual(typeof res.json.data.subscription.status, 'string');
+  // No subscription concept: the dashboard carries no subscription payload.
+  assert.strictEqual(res.json.data.subscription, undefined);
   // Sales/stock metrics are now live (Bill & Product models exist since Phases
   // 7-8) and compute to 0 for this tenant, which owns no bills.
   assert.strictEqual(res.json.data.sales.today.bills, 0);
@@ -104,16 +104,18 @@ test('owner dashboard tenant isolation (A does not see B)', async () => {
   assert.strictEqual(b.json.data.business.businessName, 'Owner Cafe');
 });
 
-test('owner subscription preview returns trial plan + days remaining', async () => {
-  const res = await send('GET', '/api/subscription', null, tokenA);
-  assert.strictEqual(res.status, 200);
-  const s = res.json.data;
-  assert.strictEqual(s.plan, 'INITIAL');
-  assert.strictEqual(s.setupAmount, 4999);
-  assert.strictEqual(s.amountMonthly, 499);
-  assert.ok(s.trialStartDate);
-  assert.ok(s.trialEndDate);
-  assert.strictEqual(typeof s.daysRemaining, 'number');
+test('legacy /api/subscription endpoints are retired (lifetime service)', async () => {
+  // Every subscription/recharge endpoint must answer 404 — billing is never
+  // gated and no recharge flow can be started.
+  const checks = [
+    ['GET', '/api/subscription'],
+    ['GET', '/api/subscription/plans'],
+    ['GET', '/api/subscription/payments'],
+  ];
+  for (const [method, path] of checks) {
+    const res = await send(method, path, null, tokenA);
+    assert.strictEqual(res.status, 404);
+  }
 });
 
 test('owner can read own business settings', async () => {

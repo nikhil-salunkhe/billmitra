@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const { ApiError } = require('../utils/ApiError');
 const Business = require('../models/Business');
 const User = require('../models/User');
-const { BUSINESS_STATUS, SUBSCRIPTION_STATUS, ROLES } = require('../config/constants');
+const { BUSINESS_STATUS, ROLES } = require('../config/constants');
 const { addDays } = require('../utils/dateUtils');
 const auditService = require('./auditService');
 const authService = require('./authService');
@@ -14,9 +14,8 @@ const authService = require('./authService');
 /**
  * Computes the admin dashboard card metrics from live collections.
  *
- * 'billsGenerated' and 'monthlySubscriptionRevenue' depend on the Bill and
- * Payment collections (Phases 8 and 12). Until those land they are returned
- * as 0 explicitly — never fabricated.
+ * BillMitra is a lifetime service, so there is no trial/expiry/revenue metric
+ * here — only genuine business lifecycle counts (total/active/suspended/inactive).
  */
 async function getDashboard() {
   const since30 = addDays(new Date(), -30);
@@ -27,10 +26,6 @@ async function getDashboard() {
     activeBusinesses,
     suspendedBusinesses,
     inactiveBusinesses,
-    trialBusinesses,
-    activeSubs,
-    expiringSubs,
-    expiredBusinesses,
     newBusinesses,
     totalOwners,
     staffCount,
@@ -39,12 +34,6 @@ async function getDashboard() {
     Business.countDocuments({ status: BUSINESS_STATUS.ACTIVE }),
     Business.countDocuments({ status: BUSINESS_STATUS.SUSPENDED }),
     Business.countDocuments({ status: BUSINESS_STATUS.INACTIVE }),
-    Business.countDocuments({ subscriptionStatus: SUBSCRIPTION_STATUS.TRIAL }),
-    Business.countDocuments({
-      subscriptionStatus: { $in: [SUBSCRIPTION_STATUS.ACTIVE, SUBSCRIPTION_STATUS.EXPIRING] },
-    }),
-    Business.countDocuments({ subscriptionStatus: SUBSCRIPTION_STATUS.EXPIRING }),
-    Business.countDocuments({ subscriptionStatus: SUBSCRIPTION_STATUS.EXPIRED }),
     Business.countDocuments({ createdAt: { $gte: since30 } }),
     User.countDocuments({ role: ROLES.BUSINESS_OWNER }),
     User.countDocuments({ role: ROLES.STAFF }),
@@ -55,16 +44,9 @@ async function getDashboard() {
     activeBusinesses,
     suspendedBusinesses,
     inactiveBusinesses,
-    trialBusinesses,
-    activeSubscriptions: activeSubs,
-    expiringSubscriptions: expiringSubs,
-    expiredBusinesses,
     newBusinessesLast30Days: newBusinesses,
     totalOwners,
     staffAccounts: staffCount,
-    // Computed in later phases (declared explicitly to remain honest).
-    billsGenerated: 0,
-    monthlySubscriptionRevenue: 0,
   };
 }
 

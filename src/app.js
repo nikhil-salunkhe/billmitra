@@ -15,15 +15,12 @@ const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const businessRoutes = require('./routes/businessRoutes');
 const reportRoutes = require('./routes/reportRoutes');
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const productRoutes = require('./routes/productRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const billRoutes = require('./routes/billRoutes');
 const stockRoutes = require('./routes/stockRoutes');
 const customerRoutes = require('./routes/customerRoutes');
-const paymentController = require('./controllers/paymentController');
-const paymentRoutes = require('./routes/paymentRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
 
@@ -82,13 +79,7 @@ function createApp() {
     app.use(morgan(env.isProduction ? 'combined' : 'dev'));
   }
 
-  // Body parsing. Webhooks are mounted FIRST so express.raw() receives the
-  // pristine request bytes — the JSON parser would consume the stream and
-  // make HMAC verification impossible.
-  app.use('/api/payments', paymentRoutes);
-  // Razorpay subscription webhook — same idempotent handler, mounted on the
-  // documented /api/subscription/webhook path with raw-body parsing.
-  app.use('/api/subscription/webhook', express.raw({ type: '*/*' }), paymentController.handleWebhook);
+  // Body parsing. (BillMitra has no payment-gateway webhooks — lifetime service.)
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -120,7 +111,6 @@ function createApp() {
   app.use('/api/admin', adminRoutes);
   app.use('/api/business', businessRoutes);
   app.use('/api/reports', reportRoutes);
-  app.use('/api/subscription', subscriptionRoutes);
   app.use('/api/products', productRoutes);
   app.use('/api/categories', categoryRoutes);
   app.use('/api/uploads', uploadRoutes);

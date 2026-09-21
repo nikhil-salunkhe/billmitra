@@ -3,12 +3,11 @@
 const mongoose = require('mongoose');
 
 const { ApiError } = require('../utils/ApiError');
-const { BUSINESS_TYPES, PRODUCT_BUSINESS_TYPES, SUBSCRIPTION_STATUS, SUBSCRIPTION_PLANS } = require('../config/constants');
+const { BUSINESS_TYPES, PRODUCT_BUSINESS_TYPES } = require('../config/constants');
 const Business = require('../models/Business');
 const BusinessSettings = require('../models/BusinessSettings');
 const User = require('../models/User');
 const authService = require('./authService');
-const subscriptionService = require('./subscriptionService');
 const storageService = require('./storageService');
 
 /**
@@ -81,7 +80,6 @@ async function createBusiness({
   pincode,
   gstRegistered = false,
   gstin,
-  plan = SUBSCRIPTION_PLANS.INITIAL.name,
   logoUrl,
   openingTime,
   closingTime,
@@ -93,12 +91,6 @@ async function createBusiness({
   const type = String(businessType || '').trim();
   if (!Object.values(BUSINESS_TYPES).includes(type)) {
     throw ApiError.badRequest('Unsupported business type', 'INVALID_BUSINESS_TYPE');
-  }
-
-  // The chosen subscription offer must exist (INITIAL or SIX_MONTH_FREE).
-  const planName = String(plan || '').trim() || SUBSCRIPTION_PLANS.INITIAL.name;
-  if (!Object.prototype.hasOwnProperty.call(SUBSCRIPTION_PLANS, planName)) {
-    throw ApiError.badRequest('Unsupported subscription plan', 'INVALID_PLAN');
   }
 
   const username = String(ownerUsername || '').trim().toLowerCase();
@@ -131,7 +123,6 @@ async function createBusiness({
     pincode,
     gstRegistered,
     gstin,
-    plan: planName,
     logoUrl: logoUrl || null,
     openingTime: openingTime || null,
     closingTime: closingTime || null,
@@ -155,26 +146,13 @@ async function createBusiness({
       }),
     ]);
 
-    // Free-trial window starts the moment the tenant exists. The length follows
-    // the chosen offer: INITIAL = 2 months free, SIX_MONTH_FREE = 6 months free
-    // (then ₹2,500 per 6-month recharge).
-    const subscription = await subscriptionService.activateTrialSubscription(
-      businessDoc._id,
-      businessDoc.createdAt || new Date(),
-      planName
-    );
-
     const safe = toSafeBusiness(businessDoc, {
       settings: settings.toSafeJSON(),
-      subscriptionId: subscription._id.toString(),
-      subscriptionStatus: SUBSCRIPTION_STATUS.TRIAL,
     });
     return { business: safe, owner: owner.toSafeJSON(), initialPassword: ownerPassword };
   } catch (err) {
     // Roll back everything created for this failed tenant.
     await Business.deleteOne({ _id: businessDoc._id });
-    const Subscription = require('../models/Subscription');
-    await Subscription.deleteMany({ businessId: businessDoc._id });
     // If the failed tenant referenced a freshly uploaded logo, remove the file
     // too so rollback leaves no orphaned images behind.
     if (logoUrl) {
@@ -185,8 +163,8 @@ async function createBusiness({
 }
 
 /**
- * Updates editable business profile fields (admin). Status/subscription changes
- * go through dedicated lifecycle endpoints, not free-form edits.
+ * Updates editable business profile fields (admin). Status changes go through
+ * the dedicated suspend/activate lifecycle endpoints, not free-form edits.
  */
 async function updateBusiness(id, updates) {
   const allowed = [
@@ -229,8 +207,7 @@ async function updateBusiness(id, updates) {
  *
  * This is a destructive hard-delete intended for admin cleanup only. It removes
  * the business, its settings, every user, product, category, customer, bill,
- * stock transaction, subscription, payment, counter and audit record that
- * belongs to the tenant.
+ * stock transaction, counter and audit record that belongs to the tenant.
  *
  * NOTE: like createBusiness, this does sequential deletes without a
  * multi-document transaction (standalone mongod has none). To avoid a partially
@@ -249,8 +226,6 @@ async function deleteBusiness(id) {
     require('../models/Customer'),
     require('../models/Bill'),
     require('../models/StockTransaction'),
-    require('../models/Subscription'),
-    require('../models/Payment'),
     require('../models/AuditLog'),
   ];
 

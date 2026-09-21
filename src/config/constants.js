@@ -46,14 +46,6 @@ const BUSINESS_STATUS = Object.freeze({
   INACTIVE: 'INACTIVE',
 });
 
-const SUBSCRIPTION_STATUS = Object.freeze({
-  TRIAL: 'TRIAL',
-  ACTIVE: 'ACTIVE',
-  EXPIRING: 'EXPIRING',
-  EXPIRED: 'EXPIRED',
-  SUSPENDED: 'SUSPENDED',
-});
-
 const PAYMENT_METHODS = Object.freeze({
   CASH: 'CASH',
   UPI: 'UPI',
@@ -84,64 +76,9 @@ const TAX_MODE = Object.freeze({
   NONE: 'NONE',
 });
 
-const SUBSCRIPTION_PLANS = Object.freeze({
-  INITIAL: {
-    name: 'INITIAL',
-    setupAmount: 4999, // ₹4,999 initial package
-    trialMonths: 2, // first 2 months subscription FREE
-    monthlyAmount: 499, // ₹499/month after trial
-    label: 'Initial Package',
-    tagline: '₹4,999 setup · 2 months free · then ₹499/month',
-  },
-  // Promotional offer: first 6 months FREE, then a ₹2,500 recharge covers the
-  // next 6 months (≈ ₹416/month). Admin picks the plan at business creation.
-  SIX_MONTH_FREE: {
-    name: 'SIX_MONTH_FREE',
-    trialMonths: 6, // first 6 months FREE
-    rechargeMonths: 6, // each recharge buys 6 months
-    rechargeAmount: 2500, // ₹2,500 per 6-month block
-    setupAmount: 2500,
-    monthlyAmount: Math.round(2500 / 6), // ≈ ₹417 display figure
-    label: 'First 6 Months Free',
-    tagline: '6 months free · then ₹2,500 per 6 months',
-  },
-  // Yearly bundle: owner buys the app + thermal-printer package at purchase
-  // (hardware price handled offline) and the FIRST YEAR is FREE. After that a
-  // ₹2,999 recharge covers the next 12 months (≈ ₹250/month). Admin picks this
-  // plan when creating a hardware-bundle customer.
-  YEARLY: {
-    name: 'YEARLY',
-    trialMonths: 12, // first year FREE (app + printer bundle)
-    rechargeMonths: 12, // each recharge buys 12 months
-    rechargeAmount: 2999, // ₹2,999 per year
-    setupAmount: 0, // hardware bundle is invoiced offline at purchase
-    monthlyAmount: Math.round(2999 / 12), // ≈ ₹250 display figure
-    label: 'First Year Free',
-    tagline: 'Buy app + printer · year 1 free · then ₹2,999/year',
-  },
-});
-
-// Threshold (in days) before expiry when a subscription is flagged as EXPIRING.
-const EXPIRING_WARNING_DAYS = 7;
-
-// Number of months in the free trial following activation.
-const TRIAL_DURATION_MONTHS = 2;
-
-const MONTHLY_AMOUNT = 499; // ₹ (intra-month recurring charge)
-const INITIAL_SETUP_AMOUNT = 4999; // ₹ initial package
-
-// How a subscription/recharge can be paid. Kept separate from PAYMENT_METHODS
-// (which describe a bill's in-store sale methods) because recharge accepts gateway
-// methods (netbanking, wallet) that don't apply to a counter bill.
-const RECHARGE_PAYMENT_METHODS = Object.freeze([
-  '', // not yet known
-  'UPI',
-  'CARD',
-  'NETBANKING',
-  'WALLET',
-  'CASH',
-  'OTHER',
-]);
+// BillMitra is provided as a lifetime service — there is no subscription,
+// trial, expiry or recharge concept anywhere in the product. Billing is always
+// allowed for an ACTIVE (non-suspended) business.
 
 module.exports = {
   ROLES,
@@ -149,15 +86,8 @@ module.exports = {
   PRODUCT_BUSINESS_TYPES,
   MENU_BUSINESS_TYPES,
   BUSINESS_STATUS,
-  SUBSCRIPTION_STATUS,
   PAYMENT_METHODS,
   PAYMENT_STATUS,
   STOCK_TRANSACTION_TYPES,
   TAX_MODE,
-  SUBSCRIPTION_PLANS,
-  EXPIRING_WARNING_DAYS,
-  TRIAL_DURATION_MONTHS,
-  MONTHLY_AMOUNT,
-  INITIAL_SETUP_AMOUNT,
-  RECHARGE_PAYMENT_METHODS,
 };

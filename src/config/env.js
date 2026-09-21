@@ -40,12 +40,6 @@ const env = {
       : 'http://localhost:5173'),
   ownerAppUrl: process.env.OWNER_APP_URL || '',
 
-  // Payment gateway placeholders (never hard-code real secrets).
-  // Prefer the RAZORPAY_* names; fall back to the legacy PAYMENT_* names.
-  razorpayKeyId: process.env.RAZORPAY_KEY_ID || process.env.PAYMENT_KEY_ID || '',
-  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || process.env.PAYMENT_KEY_SECRET || '',
-  razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || process.env.PAYMENT_WEBHOOK_SECRET || '',
-
   storage: {
     provider: process.env.STORAGE_PROVIDER || 'local',
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',

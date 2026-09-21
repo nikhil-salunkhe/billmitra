@@ -1,7 +1,7 @@
 'use strict';
 
 const { z } = require('zod');
-const { BUSINESS_TYPES, BUSINESS_STATUS, SUBSCRIPTION_PLANS } = require('../config/constants');
+const { BUSINESS_TYPES, BUSINESS_STATUS } = require('../config/constants');
 
 /**
  * Zod schemas for business creation & updates.
@@ -23,10 +23,6 @@ const createBusinessSchema = z.object({
   pincode: z.string().trim().max(12).optional(),
   gstRegistered: z.boolean().optional(),
   gstin: z.string().trim().max(20).optional(),
-  // Subscription offer: INITIAL (2 months free), SIX_MONTH_FREE (6 months
-  // free, then ₹2,500 per 6 months) or YEARLY (buy app + printer -> year 1
-  // free, then ₹2,999/year). Defaults to INITIAL when omitted.
-  plan: z.enum(Object.keys(SUBSCRIPTION_PLANS)).optional(),
   logoUrl: z.string().trim().max(500).optional(),
   openingTime: z.string().trim().regex(TIME_24H, 'Use 24-hour HH:mm format').optional().or(z.literal('')),
   closingTime: z.string().trim().regex(TIME_24H, 'Use 24-hour HH:mm format').optional().or(z.literal('')),
@@ -55,24 +51,6 @@ const resetPasswordSchema = z.object({
   newPassword: z.string().min(8, 'Password must be at least 8 characters').max(128).optional(),
 });
 
-const RECHARGE_METHODS = ['UPI', 'CARD', 'NETBANKING', 'WALLET', 'CASH', 'OTHER'];
-
-const extendSubscriptionSchema = z.object({
-  months: z.coerce.number().int().min(1, 'months must be at least 1').max(60).optional(),
-  // Record how the customer paid for an admin-granted extension -> stored on a Payment.
-  paymentMethod: z.enum(RECHARGE_METHODS).optional(),
-});
-
-const updatePaymentMethodSchema = z.object({
-  paymentMethod: z.enum(RECHARGE_METHODS),
-});
-
-const listSubscriptionsQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  status: z.enum(['TRIAL', 'ACTIVE', 'EXPIRING', 'EXPIRED', 'SUSPENDED']).optional(),
-});
-
 const auditLogsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -86,7 +64,4 @@ module.exports = {
   listBusinessesQuerySchema,
   resetPasswordSchema,
   auditLogsQuerySchema,
-  extendSubscriptionSchema,
-  listSubscriptionsQuerySchema,
-  updatePaymentMethodSchema,
 };

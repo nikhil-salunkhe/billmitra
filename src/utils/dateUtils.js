@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Date helpers. Central place so that subscription expiry, period boundaries
- * and report ranges are computed consistently.
+ * Date helpers. Central place so that report period boundaries and ranges are
+ * computed consistently across services.
  */
 
 /**
